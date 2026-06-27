@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jira Worklog Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕒</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🕒</span>
+        <span>Worklog Dashboard</span>
+      </div>
+
+      <div class="nav" id="nav">
+        <button id="prevBtn" class="icon-btn" title="Previous month">‹</button>
+        <button id="todayBtn" class="pill">Today</button>
+        <h1 id="monthLabel" class="month-label">—</h1>
+        <button id="nextBtn" class="icon-btn" title="Next month">›</button>
+        <input type="month" id="monthPicker" class="month-picker" />
+      </div>
+
+      <div class="right">
+        <span id="userBadge" class="user-badge"></span>
+        <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
+        <button id="settingsBtn" class="pill">⚙ Settings</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary" id="summary">
+        <div class="summary-item">
+          <span class="summary-value" id="monthTotal">—</span>
+          <span class="summary-label">logged this month</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-value" id="daysLogged">—</span>
+          <span class="summary-label">days with worklogs</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-value" id="avgPerDay">—</span>
+          <span class="summary-label">avg / logged day</span>
+        </div>
+        <div class="summary-spacer"></div>
+        <div id="statusMsg" class="status-msg"></div>
+      </section>
+
+      <div class="layout">
+        <section class="calendar-wrap">
+          <div class="weekday-row" id="weekdayRow"></div>
+          <div class="calendar" id="calendar"></div>
+        </section>
+
+        <aside class="detail" id="detail">
+          <div class="detail-empty" id="detailEmpty">
+            Select a day to see its worklogs.
+          </div>
+          <div class="detail-body" id="detailBody" hidden>
+            <div class="detail-header">
+              <h2 id="detailDate">—</h2>
+              <span class="detail-total" id="detailTotal"></span>
+            </div>
+            <ul class="entries" id="entries"></ul>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <!-- Settings modal -->
+    <div class="modal-backdrop" id="settingsModal" hidden>
+      <div class="modal">
+        <h2>Settings</h2>
+        <p class="modal-hint">
+          Connect to your Jira Cloud site. Your credentials are stored locally on
+          this machine and only used to talk to Jira.
+        </p>
+        <label>
+          Jira URL
+          <input
+            type="text"
+            id="baseUrl"
+            placeholder="https://your-company.atlassian.net"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          Email
+          <input
+            type="email"
+            id="email"
+            placeholder="you@company.com"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          API token
+          <input
+            type="password"
+            id="apiToken"
+            placeholder="Paste your Atlassian API token"
+            autocomplete="off"
+          />
+          <a
+            class="token-link"
+            href="https://id.atlassian.com/manage-profile/security/api-tokens"
+            target="_blank"
+            rel="noopener"
+            >Create an API token ↗</a
+          >
+        </label>
+        <div class="modal-error" id="modalError" hidden></div>
+        <div class="modal-actions">
+          <button id="cancelSettings" class="pill ghost">Cancel</button>
+          <button id="saveSettings" class="pill primary">Save &amp; connect</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="loading" id="loading" hidden>
+      <div class="spinner"></div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
