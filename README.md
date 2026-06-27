@@ -1,46 +1,52 @@
 # Jira Worklog Dashboard
 
-A small local web app that shows your **Jira Cloud worklogs in a calendar view** —
-total time logged per day, and every task you tracked time on that day, with a
-**direct link to each worklog** in Jira.
+A small, self-hosted web app that shows your **Jira Cloud worklogs in a calendar
+view** — total time logged per day, and every task you tracked time on that day,
+with a **direct link to each worklog** in Jira.
 
-It replaces the old browser extension: pick a month, see how much you logged each
-day, click a day to see the breakdown per task.
-
-![Calendar of worklogs per day, with a per-day detail panel.](#)
+Pick a month, see how much you logged each day, and click a day to see the
+breakdown per task. Each user runs it locally with their own Jira credentials.
 
 ---
 
-## Why it needs to run locally
+## Why it runs locally
 
 Jira Cloud blocks browser requests made directly with an API token (CORS). So this
 app runs a tiny local server (`server.js`) that holds your credentials and talks to
-Jira on your behalf, then serves the calendar UI to your browser. Nothing leaves
-your machine except the requests to your own Jira site.
+Jira on your behalf, then serves the calendar UI to your browser. Your credentials
+never leave your machine, and the server listens on `127.0.0.1` only.
+
+---
+
+## Requirements
+
+- [Node.js](https://nodejs.org/) 18 or newer (`node --version` to check)
+- A Jira Cloud account and an Atlassian API token
 
 ---
 
 ## Setup
 
-### 1. Install dependencies (one time)
+### 1. Get the code and install dependencies
 
-```powershell
-cd C:\ai_tests\claude\jira_dashboard
+```bash
+git clone <repository-url>
+cd jira_dashboard
 npm install
 ```
 
-### 2. Get a Jira API token
+### 2. Create a Jira API token
 
-1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
+1. Go to <https://id.atlassian.com/manage-profile/security/api-tokens>
 2. Click **Create API token**, give it a name, and copy it.
 
 ### 3. Run the app
 
-```powershell
+```bash
 npm start
 ```
 
-Then open **http://127.0.0.1:3877** in your browser.
+Then open **<http://127.0.0.1:3877>** in your browser.
 
 On first run, a **Settings** dialog appears. Enter:
 
@@ -49,8 +55,8 @@ On first run, a **Settings** dialog appears. Enter:
 - **API token** — the token you created above
 
 Click **Save & connect**. The app validates the credentials against Jira and stores
-them in `config.json` next to the app (this file is git-ignored and stays on your
-machine).
+them in `config.json` next to the app. This file holds your API token, is
+git-ignored, and stays on your machine — never commit it.
 
 ---
 
@@ -84,14 +90,40 @@ timezone** (from `/rest/api/3/myself`).
 
 ---
 
-## Notes & troubleshooting
+## Configuration
+
+| Setting | How | Default |
+| --- | --- | --- |
+| Port | `PORT` environment variable | `3877` |
+| Jira URL / email / token | Settings dialog → saved to `config.json` | — |
+
+Set a custom port:
+
+```bash
+# macOS / Linux
+PORT=4000 npm start
+```
+
+```powershell
+# Windows PowerShell
+$env:PORT=4000; npm start
+```
+
+---
+
+## Troubleshooting
 
 - **"Authentication failed"** — re-check the URL, email, and token in Settings. The
   email must match the Atlassian account that owns the token.
 - **A day looks empty but shouldn't** — worklog days are grouped using your Jira
   profile timezone, which is what Jira's own reports use.
-- **Change the port** — set the `PORT` environment variable, e.g.
-  `$env:PORT=4000; npm start`.
 - **Reset credentials** — delete `config.json` and restart, or just use Settings.
-- The server binds to `127.0.0.1` only, so it is not reachable from other machines.
-```
+
+---
+
+## Security notes
+
+- Credentials are stored locally in `config.json` (git-ignored) and are only sent to
+  your own Jira site.
+- The server binds to `127.0.0.1`, so it is not reachable from other machines.
+- Each user supplies their own API token; nothing is shared or hard-coded.
