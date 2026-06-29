@@ -259,6 +259,7 @@ function render() {
   $('tableView').hidden = state.viewMode !== 'table';
   $('calBtn').classList.toggle('active', state.viewMode === 'calendar');
   $('tableBtn').classList.toggle('active', state.viewMode === 'table');
+  document.body.classList.toggle('table-mode', state.viewMode === 'table');
   renderLegend();
   renderSummary();
   if (state.viewMode === 'calendar') {

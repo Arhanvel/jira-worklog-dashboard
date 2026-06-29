@@ -489,15 +489,22 @@ main {
 }
 
 /* ---------- Table view ---------- */
+/* In table mode, let the content use the full page width. */
+body.table-mode main {
+  max-width: none;
+  padding-left: 14px;
+  padding-right: 14px;
+}
 .table-view {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px;
 }
+/* Scroll horizontally inside the table (wide ranges); let the page handle
+   vertical scrolling rather than an inner scroll box. */
 .table-wrap {
-  overflow: auto;
-  max-height: calc(100vh - 220px);
+  overflow-x: auto;
   border-radius: 8px;
 }
 .worklog-table {
