@@ -17,26 +17,46 @@
         <span>Worklog Dashboard</span>
       </div>
 
-      <div class="nav" id="nav">
-        <button id="prevBtn" class="icon-btn" title="Previous month">‹</button>
-        <button id="todayBtn" class="pill">Today</button>
-        <h1 id="monthLabel" class="month-label">—</h1>
-        <button id="nextBtn" class="icon-btn" title="Next month">›</button>
-        <input type="month" id="monthPicker" class="month-picker" />
+      <div class="instance-area">
+        <select id="instanceSelect" class="select" title="Jira instance"></select>
       </div>
 
       <div class="right">
         <span id="userBadge" class="user-badge"></span>
         <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
-        <button id="settingsBtn" class="pill">⚙ Settings</button>
+        <button id="settingsBtn" class="pill">⚙ Instances</button>
       </div>
     </header>
+
+    <div class="toolbar">
+      <div class="range-controls">
+        <button id="prevBtn" class="icon-btn" title="Previous period">‹</button>
+        <button id="nextBtn" class="icon-btn" title="Next period">›</button>
+        <select id="presetSelect" class="select">
+          <option value="thisMonth">This month</option>
+          <option value="lastMonth">Last month</option>
+          <option value="thisWeek">This week</option>
+          <option value="last7">Last 7 days</option>
+          <option value="last14">Last 14 days</option>
+          <option value="last30">Last 30 days</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <label class="date-field">From <input type="date" id="fromDate" /></label>
+        <label class="date-field">To <input type="date" id="toDate" /></label>
+        <span id="rangeLabel" class="range-label"></span>
+      </div>
+
+      <div class="view-toggle" role="group" aria-label="View">
+        <button id="calBtn" class="seg active">▦ Calendar</button>
+        <button id="tableBtn" class="seg">▤ Table</button>
+      </div>
+    </div>
 
     <main>
       <section class="summary" id="summary">
         <div class="summary-item">
-          <span class="summary-value" id="monthTotal">—</span>
-          <span class="summary-label">logged this month</span>
+          <span class="summary-value" id="rangeTotal">—</span>
+          <span class="summary-label">logged in range</span>
         </div>
         <div class="summary-item">
           <span class="summary-value" id="daysLogged">—</span>
@@ -50,16 +70,17 @@
         <div id="statusMsg" class="status-msg"></div>
       </section>
 
-      <div class="layout">
+      <div class="legend" id="legend" hidden></div>
+
+      <!-- Calendar view -->
+      <div class="layout" id="calendarView">
         <section class="calendar-wrap">
           <div class="weekday-row" id="weekdayRow"></div>
           <div class="calendar" id="calendar"></div>
         </section>
 
         <aside class="detail" id="detail">
-          <div class="detail-empty" id="detailEmpty">
-            Select a day to see its worklogs.
-          </div>
+          <div class="detail-empty" id="detailEmpty">Select a day to see its worklogs.</div>
           <div class="detail-body" id="detailBody" hidden>
             <div class="detail-header">
               <h2 id="detailDate">—</h2>
@@ -69,61 +90,145 @@
           </div>
         </aside>
       </div>
+
+      <!-- Table view -->
+      <div class="table-view" id="tableView" hidden>
+        <div class="table-wrap">
+          <table class="worklog-table" id="worklogTable"></table>
+        </div>
+        <p class="table-hint" id="tableHint"></p>
+      </div>
     </main>
 
-    <!-- Settings modal -->
+    <!-- Instances modal -->
     <div class="modal-backdrop" id="settingsModal" hidden>
-      <div class="modal">
-        <h2>Settings</h2>
-        <p class="modal-hint">
-          Connect to your Jira Cloud site. Your credentials are stored locally on
-          this machine and only used to talk to Jira.
-        </p>
-        <label>
-          Jira URL
-          <input
-            type="text"
-            id="baseUrl"
-            placeholder="https://your-company.atlassian.net"
-            autocomplete="off"
-          />
-        </label>
-        <label>
-          Email
-          <input
-            type="email"
-            id="email"
-            placeholder="you@company.com"
-            autocomplete="off"
-          />
-        </label>
-        <label>
-          API token
-          <input
-            type="password"
-            id="apiToken"
-            placeholder="Paste your Atlassian API token"
-            autocomplete="off"
-          />
-          <a
-            class="token-link"
-            href="https://id.atlassian.com/manage-profile/security/api-tokens"
-            target="_blank"
-            rel="noopener"
-            >Create an API token ↗</a
-          >
-        </label>
-        <div class="modal-error" id="modalError" hidden></div>
-        <div class="modal-actions">
-          <button id="cancelSettings" class="pill ghost">Cancel</button>
-          <button id="saveSettings" class="pill primary">Save &amp; connect</button>
+      <div class="modal wide">
+        <div class="modal-head">
+          <h2 id="modalTitle">Jira instances</h2>
+          <button id="closeSettings" class="icon-btn ghost" title="Close">✕</button>
+        </div>
+
+        <!-- List of instances -->
+        <div id="listView">
+          <ul class="instance-list" id="instanceList"></ul>
+          <button id="addInstanceBtn" class="pill primary">+ Add instance</button>
+        </div>
+
+        <!-- Add / edit form -->
+        <div id="formView" hidden>
+          <input type="hidden" id="editId" />
+
+          <label class="field">
+            Name
+            <input type="text" id="f_name" placeholder="e.g. Work Cloud, Legacy server" />
+          </label>
+
+          <label class="field">
+            Jira URL
+            <input type="text" id="f_baseUrl" placeholder="https://your-company.atlassian.net" />
+          </label>
+
+          <div class="field">
+            <span class="field-label">Type</span>
+            <div class="seg-group">
+              <label class="radio">
+                <input type="radio" name="jtype" value="cloud" checked />
+                <span>Cloud</span>
+              </label>
+              <label class="radio">
+                <input type="radio" name="jtype" value="server" />
+                <span>Server / Data Center (legacy)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Cloud auth -->
+          <div id="cloudAuth">
+            <label class="field">
+              Email
+              <input type="email" id="f_email" placeholder="you@company.com" autocomplete="off" />
+            </label>
+            <label class="field">
+              API token <span class="opt" id="cloudSecretOpt"></span>
+              <input type="password" id="f_apiToken" placeholder="Atlassian API token" autocomplete="off" />
+              <a class="token-link" href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Create an API token ↗</a>
+            </label>
+          </div>
+
+          <!-- Server / DC auth -->
+          <div id="serverAuth" hidden>
+            <div class="field">
+              <span class="field-label">Auth method</span>
+              <div class="seg-group">
+                <label class="radio">
+                  <input type="radio" name="smethod" value="session" checked />
+                  <span>Username &amp; password (session login)</span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="smethod" value="basic" />
+                  <span>Basic auth (username &amp; password)</span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="smethod" value="pat" />
+                  <span>Personal Access Token</span>
+                </label>
+              </div>
+              <p class="opt method-note" id="methodNote"></p>
+            </div>
+
+            <label class="field" id="patField">
+              Personal Access Token <span class="opt" id="patSecretOpt"></span>
+              <input type="password" id="f_token" placeholder="Bearer token" autocomplete="off" />
+            </label>
+
+            <div id="basicFields" hidden>
+              <label class="field">
+                Username
+                <input type="text" id="f_username" placeholder="username" autocomplete="off" />
+              </label>
+              <label class="field">
+                Password <span class="opt" id="basicSecretOpt"></span>
+                <input type="password" id="f_password" placeholder="password" autocomplete="off" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Optional HTTP Basic gateway/proxy in front of Jira -->
+          <div class="gateway-box">
+            <label class="checkrow">
+              <input type="checkbox" id="f_gwEnabled" />
+              <span>Behind an HTTP Basic gateway / proxy</span>
+            </label>
+            <div id="gatewayFields" hidden>
+              <label class="field">
+                Proxy username
+                <input type="text" id="f_gwUser" placeholder="gateway username" autocomplete="off" />
+              </label>
+              <label class="field">
+                Proxy password <span class="opt" id="gwSecretOpt"></span>
+                <input type="password" id="f_gwPass" placeholder="gateway password" autocomplete="off" />
+              </label>
+              <p class="opt gw-note">
+                For a Basic-auth gateway (e.g. nginx <code>auth_basic</code>) in front of Jira.
+                With <strong>session login</strong> these go in the <code>Authorization</code> header
+                (often the same as your Jira username/password); with token/Basic Jira auth they fall
+                back to <code>Proxy-Authorization</code>.
+              </p>
+            </div>
+          </div>
+
+          <div class="diag" id="diagResult" hidden></div>
+          <div class="modal-error" id="modalError" hidden></div>
+          <div class="modal-actions">
+            <button id="cancelForm" class="pill ghost">Cancel</button>
+            <button id="testForm" class="pill">Test connection</button>
+            <button id="saveForm" class="pill primary">Save &amp; connect</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="loading" id="loading" hidden>
-      <div class="spinner"></div>
-    </div>
+    <div class="loading" id="loading" hidden><div class="spinner"></div></div>
 
     <script src="app.js"></script>
   </body>
