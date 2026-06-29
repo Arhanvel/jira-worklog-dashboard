@@ -27,7 +27,24 @@ your machine, and the server listens on `127.0.0.1` only.
 
 ---
 
-## Setup
+## Easy start (Windows) — recommended for most users
+
+Just **double-click `start-dashboard.cmd`**. It starts the dashboard and opens it in
+your browser automatically. The first time, it installs what it needs (this takes a
+minute); after that it's instant.
+
+- Keep the small black window open while you use the dashboard.
+- To stop, close that window.
+- Double-clicking it again while it's running just re-opens the browser tab.
+
+You still need **[Node.js](https://nodejs.org/)** installed once (LTS version) — the
+launcher will tell you if it's missing. To get a desktop icon, right-click
+`start-dashboard.cmd` → **Show more options** → **Send to** → **Desktop (create
+shortcut)**.
+
+---
+
+## Setup (manual / other platforms)
 
 ### 1. Get the code and install dependencies
 
