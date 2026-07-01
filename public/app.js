@@ -13,6 +13,7 @@ const state = {
   data: null,
   selectedDate: null,
   hiddenProjects: new Set(), // project keys toggled off via the legend
+  rates: { currency: 'USD', defaultRate: 0, projects: {} },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +54,38 @@ function projectBreakdown(entries) {
   return [...m.entries()]
     .map(([key, seconds]) => ({ key, seconds, color: projectColor(key) }))
     .sort((a, b) => b.seconds - a.seconds);
+}
+
+/* ================================================================== */
+/* Hourly rates → money                                               */
+/* ================================================================== */
+
+// Rate for a project: its override if set, else the global default.
+function rateFor(projectKey) {
+  const override = state.rates.projects && state.rates.projects[projectKey];
+  return Number.isFinite(override) && override > 0 ? override : state.rates.defaultRate || 0;
+}
+// Any rate configured at all? When false we hide money everywhere.
+function hasRates() {
+  if (state.rates.defaultRate > 0) return true;
+  return Object.values(state.rates.projects || {}).some((v) => v > 0);
+}
+// Money for a set of entries, each priced at its own project's rate.
+function moneyForEntries(entries) {
+  return entries.reduce((s, e) => s + (e.timeSpentSeconds / 3600) * rateFor(e.projectKey), 0);
+}
+// Money for a lump of seconds all in one project.
+function moneyForSeconds(seconds, projectKey) {
+  return (seconds / 3600) * rateFor(projectKey);
+}
+function fmtMoney(amount) {
+  const cur = state.rates.currency || 'USD';
+  const n = amount || 0;
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${cur}`;
+  }
 }
 
 /* ================================================================== */
@@ -100,8 +133,40 @@ function fmtTime(seconds) {
   if (h) return `${h}h`;
   return `${m}m`;
 }
-function fmtClock(iso) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+function fmtClock(iso, tz) {
+  const opt = { hour: '2-digit', minute: '2-digit' };
+  if (tz) {
+    try {
+      return new Date(iso).toLocaleTimeString(undefined, { ...opt, timeZone: tz });
+    } catch {
+      /* unknown tz in this browser — fall back to local */
+    }
+  }
+  return new Date(iso).toLocaleTimeString(undefined, opt);
+}
+
+/* ---------- Time-zone offsets ---------- */
+
+// Format offset minutes as "+HH:MM" / "-HH:MM".
+function fmtOffset(min) {
+  const sign = min < 0 ? '-' : '+';
+  const a = Math.abs(min);
+  return `${sign}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+}
+// This computer's current UTC offset as "+HH:MM" (getTimezoneOffset is inverted).
+function localOffset() {
+  return fmtOffset(-new Date().getTimezoneOffset());
+}
+// Whole-hour offsets from UTC-12 to UTC+14, plus the common fractional zones.
+function tzOffsetMinutes() {
+  const set = new Set();
+  for (let h = -12; h <= 14; h++) set.add(h * 60);
+  [-570, -210, 210, 270, 330, 345, 390, 525, 570, 630, 765].forEach((m) => set.add(m));
+  return [...set].sort((a, b) => a - b);
+}
+// Friendly label for a stored value ("+03:00" -> "UTC+03:00"; IANA names as-is).
+function tzLabel(tz) {
+  return /^[+-]\d\d:\d\d$/.test(tz) ? 'UTC' + tz : tz;
 }
 function fmtDayHeading(s) {
   return parseYmd(s).toLocaleDateString(undefined, {
@@ -297,17 +362,21 @@ function renderLegend() {
     el.hidden = true;
     return;
   }
+  const showMoney = hasRates();
   el.hidden = false;
   el.innerHTML =
     '<span class="legend-title">Projects</span>' +
     projects
       .map((p) => {
         const muted = isHidden(p.key) ? ' muted' : '';
+        const money = showMoney
+          ? `<span class="legend-money">${fmtMoney(moneyForSeconds(p.total, p.key))}</span>`
+          : '';
         return (
           `<span class="legend-item${muted}" data-project="${escapeHtml(p.key)}" title="Click to show/hide">` +
           `<span class="swatch" style="background:${p.color}"></span>` +
           `<span class="legend-key">${escapeHtml(p.key)}</span>` +
-          `<span class="legend-total">${fmtTime(p.total)}</span></span>`
+          `<span class="legend-total">${fmtTime(p.total)}</span>${money}</span>`
         );
       })
       .join('');
@@ -315,24 +384,35 @@ function renderLegend() {
 
 function renderSummary() {
   const data = state.data;
+  const moneyItem = $('moneyItem');
   if (!data) {
     $('rangeTotal').textContent = '—';
     $('daysLogged').textContent = '—';
     $('avgPerDay').textContent = '—';
+    moneyItem.hidden = true;
     return;
   }
   let total = 0;
   let loggedDays = 0;
+  let money = 0;
   for (const d of Object.values(data.days)) {
-    const t = sumSeconds(visibleEntries(d.entries));
+    const visible = visibleEntries(d.entries);
+    const t = sumSeconds(visible);
     if (t > 0) {
       total += t;
       loggedDays += 1;
+      money += moneyForEntries(visible);
     }
   }
   $('rangeTotal').textContent = fmtTime(total);
   $('daysLogged').textContent = String(loggedDays);
   $('avgPerDay').textContent = loggedDays ? fmtTime(Math.round(total / loggedDays)) : '0h';
+  if (hasRates()) {
+    $('rangeMoney').textContent = fmtMoney(money);
+    moneyItem.hidden = false;
+  } else {
+    moneyItem.hidden = true;
+  }
 }
 
 /* ================================================================== */
@@ -390,6 +470,9 @@ function renderCalendar() {
         .join('');
       inner += `<div class="day-bar" style="width:${pct}%">${segs}</div>`;
       inner += `<div class="day-total">${fmtTime(total)}</div>`;
+      if (hasRates()) {
+        inner += `<div class="day-money">${fmtMoney(moneyForEntries(v.entries))}</div>`;
+      }
       inner += `<div class="day-count">${v.entries.length} ${
         v.entries.length === 1 ? 'entry' : 'entries'
       }</div>`;
@@ -417,10 +500,13 @@ function renderDetail() {
     return;
   }
   const entries = info ? visibleEntries(info.entries) : [];
+  const showMoney = hasRates();
   $('detailEmpty').hidden = true;
   $('detailBody').hidden = false;
   $('detailDate').textContent = fmtDayHeading(key);
-  $('detailTotal').textContent = fmtTime(sumSeconds(entries));
+  $('detailTotal').innerHTML =
+    fmtTime(sumSeconds(entries)) +
+    (showMoney ? ` <span class="detail-money">${fmtMoney(moneyForEntries(entries))}</span>` : '');
 
   const allMode = state.activeInstanceId === 'all';
   const list = $('entries');
@@ -437,7 +523,7 @@ function renderDetail() {
         allMode && e.instanceName
           ? `<span class="chip instance">${escapeHtml(e.instanceName)}</span>`
           : '',
-        `<span class="chip">${fmtClock(e.started)}</span>`,
+        `<span class="chip">${fmtClock(e.started, e.tz)}</span>`,
         e.issueType ? `<span class="chip">${escapeHtml(e.issueType)}</span>` : '',
         e.statusName ? `<span class="chip">${escapeHtml(e.statusName)}</span>` : '',
       ]
@@ -446,13 +532,21 @@ function renderDetail() {
       const comment = e.comment
         ? `<div class="entry-comment">${escapeHtml(e.comment)}</div>`
         : '';
+      const money = showMoney
+        ? `<span class="entry-money">${fmtMoney(
+            moneyForSeconds(e.timeSpentSeconds, e.projectKey)
+          )}</span>`
+        : '';
       return `
         <li class="entry" style="border-left-color:${color}">
           <div class="entry-top">
             <a class="entry-key" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(
         e.issueKey
       )}</a>
-            <span class="entry-time">${escapeHtml(e.timeSpent || fmtTime(e.timeSpentSeconds))}</span>
+            <span class="entry-amounts">
+              <span class="entry-time">${escapeHtml(e.timeSpent || fmtTime(e.timeSpentSeconds))}</span>
+              ${money}
+            </span>
           </div>
           <p class="entry-summary">${escapeHtml(e.issueSummary)}</p>
           <div class="entry-meta">${meta}</div>
@@ -512,11 +606,17 @@ function renderTable() {
   const dates = enumerateDates(state.range.from, state.range.to);
   const tasks = buildPivot(data, dates);
   const todayStr = todayYmd();
+  const showMoney = hasRates();
 
   const colTotals = {};
-  dates.forEach((d) => (colTotals[d] = 0));
+  const colMoney = {};
+  dates.forEach((d) => ((colTotals[d] = 0), (colMoney[d] = 0)));
   for (const t of tasks) {
-    for (const d of dates) if (t.perDate[d]) colTotals[d] += t.perDate[d].seconds;
+    for (const d of dates) {
+      if (!t.perDate[d]) continue;
+      colTotals[d] += t.perDate[d].seconds;
+      colMoney[d] += moneyForSeconds(t.perDate[d].seconds, t.projectKey);
+    }
   }
 
   const isWeekend = (d) => {
@@ -568,19 +668,27 @@ function renderTable() {
           html += `<td class="cell cell-empty ${wcls}">·</td>`;
         }
       }
-      html += `<td class="col-total">${fmtTime(t.total)}</td></tr>`;
+      const tMoney = showMoney
+        ? `<small class="cell-money">${fmtMoney(moneyForSeconds(t.total, t.projectKey))}</small>`
+        : '';
+      html += `<td class="col-total">${fmtTime(t.total)}${tMoney}</td></tr>`;
     }
   }
   html += '</tbody>';
 
   // Totals row
   const grand = tasks.reduce((s, t) => s + t.total, 0);
+  const grandMoney = tasks.reduce((s, t) => s + moneyForSeconds(t.total, t.projectKey), 0);
   html += '<tbody><tr class="total-row"><td class="col-task">Total</td>';
   for (const d of dates) {
     const v = colTotals[d];
-    html += `<td class="${isWeekend(d) ? 'weekend' : ''}">${v ? fmtTime(v) : '·'}</td>`;
+    const dMoney = showMoney && v ? `<small class="cell-money">${fmtMoney(colMoney[d])}</small>` : '';
+    html += `<td class="${isWeekend(d) ? 'weekend' : ''}">${v ? fmtTime(v) : '·'}${dMoney}</td>`;
   }
-  html += `<td class="col-total grand">${fmtTime(grand)}</td></tr></tbody>`;
+  const grandMoneyHtml = showMoney
+    ? `<small class="cell-money">${fmtMoney(grandMoney)}</small>`
+    : '';
+  html += `<td class="col-total grand">${fmtTime(grand)}${grandMoneyHtml}</td></tr></tbody>`;
 
   table.innerHTML = html;
   $('tableHint').textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${
@@ -694,7 +802,9 @@ function renderInstanceList() {
           ${gw}
           <div class="meta">
             <div class="name">${escapeHtml(i.name)}</div>
-            <div class="sub">${escapeHtml(i.baseUrl)} · ${method}</div>
+            <div class="sub">${escapeHtml(i.baseUrl)} · ${method}${
+        i.timeZone ? ' · ' + escapeHtml(tzLabel(i.timeZone)) : ''
+      }</div>
           </div>
           <div class="row-actions">
             <button class="pill ghost" data-act="edit" data-id="${i.id}">Edit</button>
@@ -730,6 +840,36 @@ function setGateway(enabled) {
   $('gatewayFields').hidden = !enabled;
 }
 
+// Fill the day-grouping time-zone dropdown: "Automatic" plus a list of UTC
+// offsets, with the one matching this computer flagged.
+function populateTzOptions() {
+  const sel = $('f_tz');
+  const local = localOffset();
+  let html = '<option value="">Automatic — use Jira’s time zone</option>';
+  for (const m of tzOffsetMinutes()) {
+    const off = fmtOffset(m);
+    const mine = off === local ? ' — your computer' : '';
+    html += `<option value="${off}">UTC${off}${mine}</option>`;
+  }
+  sel.innerHTML = html;
+  $('tzNote').textContent =
+    `If morning worklogs land on the previous day, Jira’s time zone is behind yours — ` +
+    `pick your offset (this computer is currently UTC${local}).`;
+}
+
+// Select a stored value, adding an option for it first if it isn't a listed
+// offset (e.g. a hand-edited IANA name in config.json).
+function setTzValue(tz) {
+  const sel = $('f_tz');
+  if (tz && ![...sel.options].some((o) => o.value === tz)) {
+    const opt = document.createElement('option');
+    opt.value = tz;
+    opt.textContent = tzLabel(tz);
+    sel.appendChild(opt);
+  }
+  sel.value = tz || '';
+}
+
 function resetForm() {
   $('editId').value = '';
   [
@@ -749,6 +889,7 @@ function resetForm() {
   setType('cloud');
   setMethod('session');
   setGateway(false);
+  setTzValue('');
   $('modalError').hidden = true;
   $('diagResult').hidden = true;
 }
@@ -837,6 +978,7 @@ function openForm(inst) {
       $('f_gwUser').value = inst.gatewayUsername || '';
       if (inst.hasGatewaySecret) $('gwSecretOpt').textContent = '(leave blank to keep)';
     }
+    setTzValue(inst.timeZone || '');
   }
   $('modalTitle').textContent = inst ? 'Edit instance' : 'Add instance';
   $('listView').hidden = true;
@@ -864,6 +1006,7 @@ function gatherForm() {
     payload.gatewayUsername = $('f_gwUser').value;
     payload.gatewayPassword = $('f_gwPass').value;
   }
+  payload.timeZone = $('f_tz').value;
   return payload;
 }
 
@@ -902,6 +1045,92 @@ async function deleteInstance(id) {
     if (wasActive) await loadData();
   } catch (err) {
     setStatus(err.message || 'Could not delete instance.', true);
+  } finally {
+    showLoading(false);
+  }
+}
+
+/* ================================================================== */
+/* Rates modal                                                        */
+/* ================================================================== */
+
+async function refreshRates() {
+  try {
+    const r = await api('/api/rates');
+    state.rates = {
+      currency: r.currency || 'USD',
+      defaultRate: r.defaultRate || 0,
+      projects: r.projects || {},
+    };
+  } catch {
+    /* keep defaults */
+  }
+}
+
+function openRates() {
+  $('r_currency').value = state.rates.currency || 'USD';
+  $('r_default').value = state.rates.defaultRate ? String(state.rates.defaultRate) : '';
+  renderRateList();
+  $('ratesError').hidden = true;
+  $('ratesModal').hidden = false;
+}
+function closeRates() {
+  $('ratesModal').hidden = true;
+}
+
+// Projects to offer overrides for: those already overridden, plus any seen in
+// the currently loaded worklogs.
+function renderRateList() {
+  const ul = $('rateList');
+  const keys = new Set(Object.keys(state.rates.projects || {}));
+  if (state.data) for (const p of gatherProjects(state.data)) keys.add(p.key);
+  const sorted = [...keys].sort();
+  const placeholder = state.rates.defaultRate ? String(state.rates.defaultRate) : 'default';
+
+  if (!sorted.length) {
+    ul.innerHTML =
+      '<li class="rate-empty">Projects appear here once worklogs are loaded.</li>';
+    return;
+  }
+  ul.innerHTML = sorted
+    .map((k) => {
+      const val = state.rates.projects[k];
+      const color = projectColor(k);
+      return (
+        `<li class="rate-row">` +
+        `<span class="swatch" style="background:${color}"></span>` +
+        `<span class="rate-key">${escapeHtml(k)}</span>` +
+        `<input type="number" class="rate-input" data-project="${escapeHtml(k)}" min="0" step="0.01" ` +
+        `value="${val != null ? val : ''}" placeholder="${escapeHtml(placeholder)}" />` +
+        `</li>`
+      );
+    })
+    .join('');
+}
+
+async function saveRates() {
+  const currency = $('r_currency').value || 'USD';
+  const defaultRate = Number($('r_default').value) || 0;
+  const projects = {};
+  document.querySelectorAll('#rateList .rate-input').forEach((inp) => {
+    const key = inp.dataset.project;
+    const num = Number(inp.value);
+    if (key && Number.isFinite(num) && num > 0) projects[key] = num;
+  });
+  $('ratesError').hidden = true;
+  showLoading(true);
+  try {
+    const res = await api('/api/rates', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currency, defaultRate, projects }),
+    });
+    state.rates = res.rates;
+    closeRates();
+    render();
+  } catch (err) {
+    $('ratesError').textContent = err.message || 'Could not save rates.';
+    $('ratesError').hidden = false;
   } finally {
     showLoading(false);
   }
@@ -956,6 +1185,15 @@ function wireEvents() {
     render();
   });
 
+  // Rates modal
+  $('ratesBtn').addEventListener('click', openRates);
+  $('closeRates').addEventListener('click', closeRates);
+  $('cancelRates').addEventListener('click', closeRates);
+  $('saveRates').addEventListener('click', saveRates);
+  $('ratesModal').addEventListener('click', (e) => {
+    if (e.target === $('ratesModal')) closeRates();
+  });
+
   // Settings modal
   $('settingsBtn').addEventListener('click', openSettings);
   $('closeSettings').addEventListener('click', closeSettings);
@@ -993,6 +1231,10 @@ function wireEvents() {
       if (e.key === 'Escape') closeSettings();
       return;
     }
+    if (!$('ratesModal').hidden) {
+      if (e.key === 'Escape') closeRates();
+      return;
+    }
     if (e.key === 'ArrowLeft') shiftRange(-1);
     if (e.key === 'ArrowRight') shiftRange(1);
   });
@@ -1004,12 +1246,13 @@ function wireEvents() {
 
 async function init() {
   renderWeekdayRow();
+  populateTzOptions();
   wireEvents();
   applyPreset('thisMonth', false); // sets the default range without loading yet
   render();
 
   try {
-    await refreshInstances();
+    await Promise.all([refreshInstances(), refreshRates()]);
     if (!state.instances.length) {
       openSettings();
       openForm(null);

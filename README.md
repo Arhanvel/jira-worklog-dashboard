@@ -112,6 +112,18 @@ one `Authorization` header:
   the gateway credentials fall back to a `Proxy-Authorization` header (for forward
   proxies that read it).
 
+### Day grouping time zone
+
+By default each day's worklogs are grouped using **your Jira profile's time zone**
+(the same one Jira's own reports use). If that time zone is **behind** the one you
+actually work in, early-morning worklogs can slip onto the **previous** day.
+
+To fix it, edit the instance and set **Day grouping time zone** to your own UTC
+offset — the dropdown flags the offset matching this computer. Leave it on
+**Automatic** to keep using Jira's time zone. The setting is per instance, so in the
+**★ All instances** view each Jira can be corrected independently, and worklog start
+times are shown in the same zone they're grouped by.
+
 ---
 
 ## Using it
@@ -132,6 +144,11 @@ one `Authorization` header:
   its worklogs in the side panel, each with an **“Open worklog in Jira ↗”** link.
 - **Table view** — rows are tasks, columns are dates, with a **total row** and
   **total column** (grand total in the corner). Each cell links to the worklog.
+- **💲 Rates** — set a global **hourly rate** and pick a currency, then override the
+  rate for individual projects. The dashboard then shows **money earned alongside
+  time** everywhere totals appear (summary, legend, calendar days, day detail, and the
+  table totals). Money is worked out locally from your logged time — nothing is sent
+  to Jira. Leave the rate at `0` to hide money entirely.
 - **↻ Refresh** — re-fetch the current range from Jira.
 - **⚙ Instances** — add, edit, or remove Jira connections.
 
@@ -161,6 +178,7 @@ Cloud instances use REST v3 + `/search/jql`; Server/DC instances use REST v2 +
 | Port | `PORT` environment variable | `3877` |
 | Config file location | `CONFIG_PATH` environment variable | `./config.json` |
 | Jira instances | **⚙ Instances** dialog → saved to `config.json` | — |
+| Hourly rates | **💲 Rates** dialog → saved to `config.json` | none (money hidden) |
 
 Set a custom port:
 
@@ -184,12 +202,25 @@ $env:PORT=4000; npm start
       "name": "Work Cloud",
       "baseUrl": "https://your-company.atlassian.net",
       "type": "cloud",
-      "auth": { "method": "token", "email": "you@company.com", "apiToken": "…" }
+      "auth": { "method": "token", "email": "you@company.com", "apiToken": "…" },
+      "timeZone": "+03:00"
     }
   ],
-  "activeInstanceId": "…"
+  "activeInstanceId": "…",
+  "rates": {
+    "currency": "USD",
+    "defaultRate": 50,
+    "projects": { "ABC": 75 }
+  }
 }
 ```
+
+> `rates` is optional. `defaultRate` is the global hourly rate; `projects` maps a
+> project key to a rate that overrides the default for that project.
+>
+> `timeZone` on an instance is optional too — a UTC offset like `"+03:00"` (or an
+> IANA name such as `"Europe/Berlin"`) used to group worklogs into days. Omit it to
+> use the Jira profile's own time zone.
 
 > Upgrading from an earlier single-instance version? An old
 > `{ baseUrl, email, apiToken }` config is migrated automatically on first run.
@@ -220,6 +251,9 @@ browser login works:
   PAT vs Basic choice matches what your instance accepts.
 - **A day looks empty but shouldn't** — worklog days are grouped using your Jira
   profile timezone, which is what Jira's own reports use.
+- **Worklogs land on the wrong day (often the previous one)** — your Jira's time zone
+  is behind the one you work in. Edit the instance and set **Day grouping time zone**
+  to your UTC offset (see [Day grouping time zone](#day-grouping-time-zone)).
 - **Remove / reset a connection** — use the **⚙ Instances** dialog, or delete
   `config.json` and restart to start fresh.
 

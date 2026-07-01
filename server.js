@@ -90,6 +90,7 @@ function safeInstance(i) {
     authMethod: a.method,
     email: a.email || '',
     username: a.username || '',
+    timeZone: i.timeZone || '',
     hasSecret: !!(a.apiToken || a.token || a.password),
     gatewayEnabled: !!i.gateway,
     gatewayUsername: (i.gateway && i.gateway.username) || '',
@@ -99,6 +100,32 @@ function safeInstance(i) {
 
 function findInstance(cfg, id) {
   return cfg.instances.find((i) => i.id === id) || null;
+}
+
+// Hourly rates: a global default plus optional per-project overrides. Money is
+// worked out on the client from these; the server only stores/validates them.
+//   { currency: 'USD', defaultRate: 50, projects: { ABC: 75 } }
+function normaliseRates(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const projects = {};
+  if (r.projects && typeof r.projects === 'object') {
+    for (const [k, v] of Object.entries(r.projects)) {
+      const key = String(k || '')
+        .trim()
+        .toUpperCase();
+      const num = Number(v);
+      if (key && Number.isFinite(num) && num > 0) projects[key] = num;
+    }
+  }
+  const defaultRate = Number(r.defaultRate);
+  const currency = String(r.currency || '')
+    .trim()
+    .toUpperCase();
+  return {
+    currency: /^[A-Z]{3}$/.test(currency) ? currency : 'USD',
+    defaultRate: Number.isFinite(defaultRate) && defaultRate > 0 ? defaultRate : 0,
+    projects,
+  };
 }
 
 function pickInstance(cfg, id) {
@@ -159,6 +186,12 @@ function resolveInstance(body, existing) {
     gateway = null; // explicitly turned off
   }
 
+  // Day-grouping time-zone override. Unlike secrets, a blank value is meaningful
+  // (it means "auto"), so only fall back to the stored value when the field is
+  // absent from the request entirely.
+  const timeZone =
+    body.timeZone === undefined ? ex.timeZone || '' : String(body.timeZone).trim();
+
   const out = {
     id: ex.id || crypto.randomUUID(),
     name,
@@ -167,6 +200,7 @@ function resolveInstance(body, existing) {
     auth,
   };
   if (gateway) out.gateway = gateway;
+  if (timeZone) out.timeZone = timeZone;
   return out;
 }
 
@@ -185,6 +219,9 @@ function validateInstance(inst) {
   if (inst.gateway) {
     if (!inst.gateway.username) return 'Proxy username is required for the HTTP Basic gateway.';
     if (!inst.gateway.password) return 'Proxy password is required for the HTTP Basic gateway.';
+  }
+  if (inst.timeZone && !isValidTimeZone(inst.timeZone)) {
+    return `Unrecognised time zone "${inst.timeZone}". Use a UTC offset like +03:00 or leave it on Automatic.`;
   }
   return null;
 }
@@ -512,6 +549,24 @@ function dateInTz(isoString, timeZone) {
   }).format(d);
 }
 
+// Shift a YYYY-MM-DD string by whole days (in UTC, so DST never interferes).
+function ymdShift(ymd, days) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+// A time zone Intl accepts: an IANA name ("Europe/Berlin"), "UTC", or a fixed
+// offset ("+03:00", "-05:00"). Empty means "use Jira's own time zone".
+function isValidTimeZone(tz) {
+  if (!tz) return true;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function mapLimit(items, limit, fn) {
   const results = new Array(items.length);
   let i = 0;
@@ -676,6 +731,18 @@ app.post('/api/active', (req, res) => {
   res.json({ ok: true, activeInstanceId: inst.id });
 });
 
+app.get('/api/rates', (req, res) => {
+  const cfg = readConfig();
+  res.json(normaliseRates(cfg.rates));
+});
+
+app.put('/api/rates', (req, res) => {
+  const cfg = readConfig();
+  cfg.rates = normaliseRates(req.body);
+  writeConfig(cfg);
+  res.json({ ok: true, rates: cfg.rates });
+});
+
 app.get('/api/me', async (req, res) => {
   const cfg = readConfig();
   const inst = pickInstance(cfg, req.query.instance);
@@ -736,11 +803,19 @@ app.post('/api/diagnose', async (req, res) => {
 // tagged with the instance so a merged/unified view can tell them apart).
 async function collectWorklogs(inst, from, to) {
   const me = await getMyself(inst);
-  const tz = me.timeZone;
-  const issues = await searchWorklogIssues(inst, from, to);
+  // Group days in the instance's override time zone when set, otherwise the Jira
+  // profile's own zone (the previous behaviour).
+  const tz = inst.timeZone || me.timeZone;
 
-  const startedAfter = Date.parse(`${from}T00:00:00Z`) - 2 * 86400000;
-  const startedBefore = Date.parse(`${to}T23:59:59Z`) + 2 * 86400000;
+  // When grouping in a zone that differs from Jira's, a worklog can land in a day
+  // one side of [from, to] under Jira's own zone but inside it under `tz`. Widen
+  // the issue search a day each side so those aren't missed; the per-day filter
+  // below still trims to the exact requested range in `tz`.
+  const pad = inst.timeZone ? 1 : 0;
+  const issues = await searchWorklogIssues(inst, ymdShift(from, -pad), ymdShift(to, pad));
+
+  const startedAfter = Date.parse(`${from}T00:00:00Z`) - (2 + pad) * 86400000;
+  const startedBefore = Date.parse(`${to}T23:59:59Z`) + (2 + pad) * 86400000;
 
   const perIssue = await mapLimit(issues, 6, async (issue) => ({
     issue,
@@ -772,6 +847,7 @@ async function collectWorklogs(inst, from, to) {
         statusName,
         instanceId: inst.id,
         instanceName: inst.name,
+        tz,
         timeSpent: w.timeSpent,
         timeSpentSeconds: w.timeSpentSeconds || 0,
         started: w.started,
@@ -903,4 +979,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { resolveInstance, safeInstance, validateInstance, authHeader, jiraFetch, app };
+module.exports = {
+  resolveInstance,
+  safeInstance,
+  validateInstance,
+  normaliseRates,
+  authHeader,
+  jiraFetch,
+  app,
+};

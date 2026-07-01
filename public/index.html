@@ -24,6 +24,7 @@
       <div class="right">
         <span id="userBadge" class="user-badge"></span>
         <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
+        <button id="ratesBtn" class="pill" title="Hourly rates">💲 Rates</button>
         <button id="settingsBtn" class="pill">⚙ Instances</button>
       </div>
     </header>
@@ -65,6 +66,10 @@
         <div class="summary-item">
           <span class="summary-value" id="avgPerDay">—</span>
           <span class="summary-label">avg / logged day</span>
+        </div>
+        <div class="summary-item" id="moneyItem" hidden>
+          <span class="summary-value money" id="rangeMoney">—</span>
+          <span class="summary-label">earned in range</span>
         </div>
         <div class="summary-spacer"></div>
         <div id="statusMsg" class="status-msg"></div>
@@ -193,6 +198,12 @@
             </div>
           </div>
 
+          <label class="field">
+            Day grouping time zone
+            <select id="f_tz" class="select"></select>
+            <span class="opt tz-note" id="tzNote"></span>
+          </label>
+
           <!-- Optional HTTP Basic gateway/proxy in front of Jira -->
           <div class="gateway-box">
             <label class="checkrow">
@@ -224,6 +235,60 @@
             <button id="testForm" class="pill">Test connection</button>
             <button id="saveForm" class="pill primary">Save &amp; connect</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rates modal -->
+    <div class="modal-backdrop" id="ratesModal" hidden>
+      <div class="modal">
+        <div class="modal-head">
+          <h2>Hourly rates</h2>
+          <button id="closeRates" class="icon-btn ghost" title="Close">✕</button>
+        </div>
+
+        <p class="opt rates-intro">
+          Set a global hourly rate, then override it for individual projects. Money is
+          calculated from your logged time — nothing is sent to Jira.
+        </p>
+
+        <div class="rates-grid">
+          <label class="field">
+            Default rate <span class="opt">/ hour</span>
+            <input type="number" id="r_default" min="0" step="0.01" placeholder="0" />
+          </label>
+          <label class="field">
+            Currency
+            <select id="r_currency" class="select">
+              <option value="USD">USD — US Dollar ($)</option>
+              <option value="EUR">EUR — Euro (€)</option>
+              <option value="GBP">GBP — British Pound (£)</option>
+              <option value="PLN">PLN — Polish Złoty (zł)</option>
+              <option value="UAH">UAH — Ukrainian Hryvnia (₴)</option>
+              <option value="CAD">CAD — Canadian Dollar ($)</option>
+              <option value="AUD">AUD — Australian Dollar ($)</option>
+              <option value="CHF">CHF — Swiss Franc</option>
+              <option value="SEK">SEK — Swedish Krona</option>
+              <option value="NOK">NOK — Norwegian Krone</option>
+              <option value="DKK">DKK — Danish Krone</option>
+              <option value="INR">INR — Indian Rupee (₹)</option>
+              <option value="JPY">JPY — Japanese Yen (¥)</option>
+              <option value="CNY">CNY — Chinese Yuan (¥)</option>
+              <option value="BRL">BRL — Brazilian Real (R$)</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Per-project overrides</span>
+          <p class="opt">Leave a project blank to use the default rate. Applies across all instances.</p>
+          <ul class="rate-list" id="rateList"></ul>
+        </div>
+
+        <div class="modal-error" id="ratesError" hidden></div>
+        <div class="modal-actions">
+          <button id="cancelRates" class="pill ghost">Cancel</button>
+          <button id="saveRates" class="pill primary">Save rates</button>
         </div>
       </div>
     </div>
