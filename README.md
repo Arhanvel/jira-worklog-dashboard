@@ -5,8 +5,9 @@ view** — total time logged per day, and every task you tracked time on, with a
 **direct link to each worklog** in Jira.
 
 Pick a date range (any start day — handy for payroll periods that don't start on the
-1st), see how much you logged each day, and drill into the per-task breakdown. Works
-with multiple Jira sites at once, both **Cloud** and **Server / Data Center**.
+1st), see how much you logged each day, and drill into the per-task breakdown. You can
+also **log new work** straight from the table. Works with multiple Jira sites at once,
+both **Cloud** and **Server / Data Center**.
 
 ---
 
@@ -143,7 +144,21 @@ times are shown in the same zone they're grouped by.
 - **Calendar view** — each day shows the total time you logged; click a day to see
   its worklogs in the side panel, each with an **“Open worklog in Jira ↗”** link.
 - **Table view** — rows are tasks, columns are dates, with a **total row** and
-  **total column** (grand total in the corner). Each cell links to the worklog.
+  **total column** (grand total in the corner). **Click any cell** (filled or empty)
+  to open a dialog listing that day's worklogs for the task, each with *Open in Jira*,
+  **Edit**, and **Delete**, plus a form to **log more work**.
+- **Logging work** — in the cell dialog, set the **date & time**, the **time logged**
+  (Jira units like `1h 30m`, `2h`, `45m`), and an optional description, then **Log
+  work**. The time is written to Jira **exactly as entered** — no time-zone
+  conversion — in the instance's [day-grouping time zone](#day-grouping-time-zone),
+  so it lands on the day you picked. The table refreshes with the new entry.
+- **Editing & deleting** — in the same dialog, **Edit** a worklog in place (time,
+  date/time, or description) or **Delete** it. Changes go straight to Jira and the
+  view refreshes.
+- **➕ Log work** (header) — log against **any** ticket, even one not in the current
+  table. Pick the Jira instance, type a ticket id (e.g. `TIC-123`), click **Check
+  ticket** to confirm it exists and see its title, then fill in the same fields and
+  **Log work**.
 - **💲 Rates** — set a global **hourly rate** and pick a currency, then override the
   rate for individual projects. The dashboard then shows **money earned alongside
   time** everywhere totals appear (summary, legend, calendar days, day detail, and the

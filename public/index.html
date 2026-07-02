@@ -24,6 +24,7 @@
       <div class="right">
         <span id="userBadge" class="user-badge"></span>
         <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
+        <button id="newWorklogBtn" class="pill primary" title="Log work on any ticket">➕ Log work</button>
         <button id="ratesBtn" class="pill" title="Hourly rates">💲 Rates</button>
         <button id="settingsBtn" class="pill">⚙ Instances</button>
       </div>
@@ -289,6 +290,92 @@
         <div class="modal-actions">
           <button id="cancelRates" class="pill ghost">Cancel</button>
           <button id="saveRates" class="pill primary">Save rates</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Worklog modal (view + add for a task on a given day) -->
+    <div class="modal-backdrop" id="worklogModal" hidden>
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="wlTitle">Worklogs</h2>
+          <button id="closeWorklog" class="icon-btn ghost" title="Close">✕</button>
+        </div>
+
+        <div class="wl-context" id="wlContext"></div>
+
+        <div class="wl-section-title">Logged on this day</div>
+        <ul class="wl-list" id="wlList"></ul>
+
+        <div class="wl-section-title">Add worklog</div>
+        <div class="wl-add">
+          <label class="field">
+            Date &amp; time
+            <input type="datetime-local" id="wl_started" />
+            <span class="opt" id="wlTzNote"></span>
+          </label>
+          <label class="field">
+            Time logged
+            <input type="text" id="wl_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" />
+          </label>
+          <label class="field">
+            Work description
+            <textarea id="wl_comment" rows="3" placeholder="What did you work on? (optional)"></textarea>
+          </label>
+          <div class="wl-ok" id="wlOk" hidden></div>
+          <div class="modal-error" id="wlError" hidden></div>
+          <div class="modal-actions">
+            <button id="cancelWorklog" class="pill ghost">Close</button>
+            <button id="logWorkBtn" class="pill primary">Log work</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log new worklog (pick instance + ticket) modal -->
+    <div class="modal-backdrop" id="newWorklogModal" hidden>
+      <div class="modal">
+        <div class="modal-head">
+          <h2>Log new worklog</h2>
+          <button id="closeNewWorklog" class="icon-btn ghost" title="Close">✕</button>
+        </div>
+
+        <label class="field">
+          Jira instance
+          <select id="nw_instance" class="select"></select>
+        </label>
+
+        <label class="field">
+          Ticket
+          <div class="nw-check-row">
+            <input type="text" id="nw_key" placeholder="e.g. TIC-123" autocomplete="off" />
+            <button id="nw_checkBtn" class="pill">Check ticket</button>
+          </div>
+        </label>
+
+        <div class="nw-result" id="nw_result" hidden></div>
+
+        <div id="nw_form" hidden>
+          <label class="field">
+            Date &amp; time
+            <input type="datetime-local" id="nw_started" />
+            <span class="opt" id="nw_tzNote"></span>
+          </label>
+          <label class="field">
+            Time logged
+            <input type="text" id="nw_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" />
+          </label>
+          <label class="field">
+            Work description
+            <textarea id="nw_comment" rows="3" placeholder="What did you work on? (optional)"></textarea>
+          </label>
+        </div>
+
+        <div class="wl-ok" id="nw_ok" hidden></div>
+        <div class="modal-error" id="nw_error" hidden></div>
+        <div class="modal-actions">
+          <button id="cancelNewWorklog" class="pill ghost">Close</button>
+          <button id="nw_logBtn" class="pill primary" hidden>Log work</button>
         </div>
       </div>
     </div>

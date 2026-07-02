@@ -1008,6 +1008,246 @@ body.table-mode main {
   padding: 4px 2px;
 }
 
+/* ---------- Worklog modal ---------- */
+.wl-context {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.wl-context .wl-key {
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: none;
+}
+.wl-context .wl-key:hover {
+  text-decoration: underline;
+}
+.wl-context .wl-summary {
+  color: var(--text);
+  font-size: 13px;
+  margin-top: 3px;
+  line-height: 1.35;
+}
+.wl-context .wl-sub {
+  color: var(--text-faint);
+  font-size: 12px;
+  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.wl-section-title {
+  color: var(--text-faint);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px;
+}
+.wl-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+.wl-list:empty::after {
+  content: "Nothing logged here yet.";
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.wl-item {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.wl-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.wl-item-time {
+  font-weight: 700;
+  color: var(--green);
+  white-space: nowrap;
+}
+.wl-item-clock {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.wl-item-comment {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.wl-item-open {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.wl-item-open:hover {
+  text-decoration: underline;
+}
+.wl-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.wl-item-spacer {
+  flex: 1;
+}
+.wl-linkbtn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+}
+.wl-linkbtn:hover {
+  text-decoration: underline;
+}
+.wl-linkbtn.danger {
+  color: #ff8080;
+}
+.wl-item.wl-editing {
+  border-color: var(--accent-dim);
+}
+.wl-item.wl-editing .field {
+  margin-bottom: 10px;
+}
+.wl-item.wl-editing .field input,
+.wl-item.wl-editing .field textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  color-scheme: dark;
+  resize: vertical;
+}
+.wl-item.wl-editing .wl-item-actions {
+  justify-content: flex-end;
+}
+.wl-add textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+.wl-add textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.wl-add input[type="datetime-local"] {
+  color-scheme: dark;
+}
+.wl-ok {
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  color: var(--green);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.cell.cell-clickable {
+  cursor: pointer;
+}
+.cell.cell-clickable:hover {
+  background: var(--surface-3);
+}
+
+/* ---------- Log new worklog modal ---------- */
+.nw-check-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.nw-check-row input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+}
+.nw-check-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.nw-check-row .pill {
+  white-space: nowrap;
+}
+.nw-result {
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.nw-result.ok {
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.nw-result.bad {
+  border-color: rgba(240, 160, 32, 0.5);
+  background: rgba(240, 160, 32, 0.1);
+  color: var(--text);
+}
+.nw-found-key {
+  font-weight: 700;
+  color: var(--green);
+}
+.nw-found-summary {
+  color: var(--text);
+}
+#nw_form textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+#nw_form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+#nw_form input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
 /* ---------- Loading ---------- */
 .loading {
   position: fixed;

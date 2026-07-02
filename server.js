@@ -567,6 +567,57 @@ function isValidTimeZone(tz) {
   }
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// UTC offset (minutes) of a zone at a given wall-clock moment. Handles fixed
+// offsets ("+03:00"), "UTC", and IANA names (DST-aware for the given date).
+function offsetMinutesForZone(tz, y, mo, d, h, mi, s) {
+  const om = /^([+-])(\d{2}):?(\d{2})$/.exec(tz || '');
+  if (om) return (om[1] === '-' ? -1 : 1) * (Number(om[2]) * 60 + Number(om[3]));
+  if (!tz || /^UTC$/i.test(tz)) return 0;
+  // Treat the entered components as UTC, see what wall-clock `tz` shows for that
+  // instant, and the difference is the offset.
+  const asUTC = Date.UTC(y, mo - 1, d, h, mi, s || 0);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(asUTC));
+  const get = (t) => Number(parts.find((p) => p.type === t).value);
+  const tzWall = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return Math.round((tzWall - asUTC) / 60000);
+}
+
+// Turn a "YYYY-MM-DDTHH:mm" (as typed) into Jira's started format
+// "yyyy-MM-dd'T'HH:mm:ss.SSSZ", attaching `tz`'s offset so the wall-clock the
+// user entered is preserved exactly (no conversion).
+function formatStarted(tz, local) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(local || ''));
+  if (!m) return null;
+  const [, Y, Mo, D, H, Mi, S] = m;
+  const off = offsetMinutesForZone(tz, +Y, +Mo, +D, +H, +Mi, +(S || 0));
+  const sign = off < 0 ? '-' : '+';
+  const ao = Math.abs(off);
+  return `${Y}-${Mo}-${D}T${H}:${Mi}:${pad2(+(S || 0))}.000${sign}${pad2(Math.floor(ao / 60))}${pad2(ao % 60)}`;
+}
+
+// Worklog comment: a plain string for Server/DC (v2), an ADF doc for Cloud (v3).
+// Returns null for an empty comment so the field can be omitted.
+function buildComment(text, isCloud) {
+  const t = String(text == null ? '' : text).replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  if (!t.trim()) return null;
+  if (!isCloud) return t;
+  const content = t.split('\n').map((line) =>
+    line ? { type: 'paragraph', content: [{ type: 'text', text: line }] } : { type: 'paragraph' }
+  );
+  return { type: 'doc', version: 1, content };
+}
+
 async function mapLimit(items, limit, fn) {
   const results = new Array(items.length);
   let i = 0;
@@ -949,6 +1000,136 @@ app.get('/api/worklogs', async (req, res) => {
   }
 });
 
+// A blank comment as valid ADF (Cloud) — used on edit to clear existing text.
+const EMPTY_ADF = { type: 'doc', version: 1, content: [{ type: 'paragraph' }] };
+
+// Assemble the { started, timeSpent, comment } body Jira expects. The client sends
+// the date/time exactly as typed (YYYY-MM-DDTHH:mm); we attach the instance's
+// effective time-zone offset so the wall-clock is preserved. May throw on auth
+// (getMyself); returns { error } for bad input or { body } on success.
+async function buildWorklogPayload(inst, src, forEdit) {
+  const timeSpent = String(src.timeSpent || '').trim();
+  if (!timeSpent) return { error: 'Time logged is required.' };
+
+  const me = await getMyself(inst);
+  const tz = inst.timeZone || me.timeZone;
+  const started = formatStarted(tz, src.started);
+  if (!started) return { error: 'A valid date & time is required.' };
+
+  const isCloud = inst.type === 'cloud';
+  const body = { started, timeSpent };
+  const comment = buildComment(src.comment, isCloud);
+  if (comment !== null) body.comment = comment;
+  else if (forEdit) body.comment = isCloud ? EMPTY_ADF : ''; // clear on edit
+  return { body };
+}
+
+function pickWorklog(w) {
+  return { id: w.id, timeSpent: w.timeSpent, timeSpentSeconds: w.timeSpentSeconds, started: w.started };
+}
+
+// Verify a ticket exists and return its summary + the effective time zone (so the
+// "Log new worklog" flow can show the title and label the time field correctly).
+app.get('/api/issue', async (req, res) => {
+  const cfg = readConfig();
+  const inst = findInstance(cfg, req.query.instance);
+  if (!inst) return res.status(400).json({ error: 'Unknown Jira instance.' });
+  const key = String(req.query.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'Ticket id is required.' });
+  try {
+    const issue = await jiraFetch(inst, `/issue/${encodeURIComponent(key)}?fields=summary`);
+    const me = await getMyself(inst);
+    res.json({
+      key: issue.key,
+      summary: (issue.fields && issue.fields.summary) || '',
+      timeZone: inst.timeZone || me.timeZone,
+    });
+  } catch (err) {
+    if (err.status === 404) return res.status(404).json({ error: `Ticket “${key}” not found.` });
+    res.status(authStatus(err)).json(connError(err));
+  }
+});
+
+// Create a worklog.
+app.post('/api/worklog', async (req, res) => {
+  const cfg = readConfig();
+  const inst = findInstance(cfg, req.body.instanceId);
+  if (!inst) return res.status(400).json({ error: 'Unknown Jira instance.' });
+  const issueKey = String(req.body.issueKey || '').trim();
+  if (!issueKey) return res.status(400).json({ error: 'Issue key is required.' });
+
+  let payload;
+  try {
+    payload = await buildWorklogPayload(inst, req.body, false);
+  } catch (err) {
+    return res.status(authStatus(err)).json(connError(err));
+  }
+  if (payload.error) return res.status(400).json({ error: payload.error });
+
+  try {
+    const w = await jiraFetch(inst, `/issue/${encodeURIComponent(issueKey)}/worklog`, {
+      method: 'POST',
+      body: JSON.stringify(payload.body),
+    });
+    res.json({ ok: true, worklog: pickWorklog(w) });
+  } catch (err) {
+    res.status(authStatus(err)).json(connError(err));
+  }
+});
+
+// Edit an existing worklog.
+app.put('/api/worklog', async (req, res) => {
+  const cfg = readConfig();
+  const inst = findInstance(cfg, req.body.instanceId);
+  if (!inst) return res.status(400).json({ error: 'Unknown Jira instance.' });
+  const issueKey = String(req.body.issueKey || '').trim();
+  const worklogId = String(req.body.worklogId || '').trim();
+  if (!issueKey || !worklogId) {
+    return res.status(400).json({ error: 'Issue key and worklog id are required.' });
+  }
+
+  let payload;
+  try {
+    payload = await buildWorklogPayload(inst, req.body, true);
+  } catch (err) {
+    return res.status(authStatus(err)).json(connError(err));
+  }
+  if (payload.error) return res.status(400).json({ error: payload.error });
+
+  try {
+    const w = await jiraFetch(
+      inst,
+      `/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
+      { method: 'PUT', body: JSON.stringify(payload.body) }
+    );
+    res.json({ ok: true, worklog: pickWorklog(w) });
+  } catch (err) {
+    res.status(authStatus(err)).json(connError(err));
+  }
+});
+
+// Delete a worklog.
+app.delete('/api/worklog', async (req, res) => {
+  const cfg = readConfig();
+  const inst = findInstance(cfg, req.body.instanceId);
+  if (!inst) return res.status(400).json({ error: 'Unknown Jira instance.' });
+  const issueKey = String(req.body.issueKey || '').trim();
+  const worklogId = String(req.body.worklogId || '').trim();
+  if (!issueKey || !worklogId) {
+    return res.status(400).json({ error: 'Issue key and worklog id are required.' });
+  }
+  try {
+    await jiraFetch(
+      inst,
+      `/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
+      { method: 'DELETE' }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(authStatus(err)).json(connError(err));
+  }
+});
+
 /* ================================================================== */
 /* Error helpers                                                      */
 /* ================================================================== */
@@ -984,6 +1165,9 @@ module.exports = {
   safeInstance,
   validateInstance,
   normaliseRates,
+  formatStarted,
+  buildComment,
+  offsetMinutesForZone,
   authHeader,
   jiraFetch,
   app,

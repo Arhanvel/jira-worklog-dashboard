@@ -14,6 +14,8 @@ const state = {
   selectedDate: null,
   hiddenProjects: new Set(), // project keys toggled off via the legend
   rates: { currency: 'USD', defaultRate: 0, projects: {} },
+  worklogModal: null, // { instanceId, issueKey, date } while the add/view modal is open
+  newWorklog: null, // { instanceId, issueKey, summary, tz } after a ticket check
 };
 
 const $ = (id) => document.getElementById(id);
@@ -143,6 +145,28 @@ function fmtClock(iso, tz) {
     }
   }
   return new Date(iso).toLocaleTimeString(undefined, opt);
+}
+
+// An ISO instant as a datetime-local value ("YYYY-MM-DDTHH:mm") in zone `tz`,
+// so editing shows the same wall-clock the worklog is displayed at.
+function isoToLocalInput(iso, tz) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || undefined,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(d);
+    const g = (t) => parts.find((p) => p.type === t).value;
+    return `${g('year')}-${g('month')}-${g('day')}T${g('hour')}:${g('minute')}`;
+  } catch {
+    return '';
+  }
 }
 
 /* ---------- Time-zone offsets ---------- */
@@ -574,7 +598,9 @@ function buildPivot(data, dates) {
           key: e.issueKey,
           projectKey: e.projectKey,
           color: projectColor(e.projectKey),
+          instanceId: e.instanceId,
           instanceName: e.instanceName,
+          tz: e.tz,
           summary: e.issueSummary,
           base: e.link.split('/browse/')[0],
           perDate: {},
@@ -653,19 +679,19 @@ function renderTable() {
       )}</a></span><span class="task-summary" title="${escapeHtml(t.summary)}">${escapeHtml(
         t.summary
       )}</span>${instLine}</td>`;
+      const cellData = `data-instance="${escapeHtml(t.instanceId)}" data-issue="${escapeHtml(
+        t.key
+      )}"`;
       for (const d of dates) {
         const c = t.perDate[d];
         const wcls = isWeekend(d) ? 'weekend' : '';
         if (c) {
-          const url =
-            c.entries.length === 1
-              ? c.entries[0].link
-              : `${t.base}/browse/${t.key}?page=com.atlassian.jira.plugin.system.issuetabpanels:worklog-tabpanel`;
-          html += `<td class="cell ${wcls}"><a class="cell-link" href="${url}" target="_blank" rel="noopener" title="${
-            c.entries.length
-          } worklog(s)">${fmtTime(c.seconds)}</a></td>`;
+          const n = c.entries.length;
+          html += `<td class="cell cell-clickable ${wcls}" ${cellData} data-date="${d}" title="${n} worklog${
+            n === 1 ? '' : 's'
+          } — click to view or add"><span class="cell-link">${fmtTime(c.seconds)}</span></td>`;
         } else {
-          html += `<td class="cell cell-empty ${wcls}">·</td>`;
+          html += `<td class="cell cell-empty cell-clickable ${wcls}" ${cellData} data-date="${d}" title="Click to log work on this day">·</td>`;
         }
       }
       const tMoney = showMoney
@@ -693,7 +719,7 @@ function renderTable() {
   table.innerHTML = html;
   $('tableHint').textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${
     dates.length
-  } day${dates.length === 1 ? '' : 's'} · click a cell to open the worklog in Jira`;
+  } day${dates.length === 1 ? '' : 's'} · click a cell to view or add worklogs`;
 }
 
 /* ================================================================== */
@@ -1137,6 +1163,362 @@ async function saveRates() {
 }
 
 /* ================================================================== */
+/* Worklog modal — view a cell's worklogs and add a new one           */
+/* ================================================================== */
+
+// Entries for one task on one day, earliest first.
+function cellEntriesFor(instanceId, issueKey, date) {
+  const day = state.data && state.data.days[date];
+  if (!day) return [];
+  return day.entries
+    .filter((e) => e.instanceId === instanceId && e.issueKey === issueKey)
+    .sort((a, b) => new Date(a.started) - new Date(b.started));
+}
+
+// Any entry for the task in the loaded range — gives summary, base URL, tz, etc.
+function taskMetaFor(instanceId, issueKey) {
+  if (!state.data) return null;
+  for (const day of Object.values(state.data.days)) {
+    for (const e of day.entries) {
+      if (e.instanceId === instanceId && e.issueKey === issueKey) return e;
+    }
+  }
+  return null;
+}
+
+function openWorklogModal(instanceId, issueKey, date) {
+  state.worklogModal = { instanceId, issueKey, date, editId: null };
+  $('wlError').hidden = true;
+  $('wlOk').hidden = true;
+  $('wl_time').value = '';
+  $('wl_comment').value = '';
+  $('wl_started').value = `${date}T09:00`;
+  renderWorklogModalBody();
+  $('worklogModal').hidden = false;
+  $('wl_time').focus();
+}
+
+function closeWorklog() {
+  $('worklogModal').hidden = true;
+  state.worklogModal = null;
+}
+
+function renderWorklogModalBody() {
+  const m = state.worklogModal;
+  if (!m) return;
+  const meta = taskMetaFor(m.instanceId, m.issueKey);
+  const entries = cellEntriesFor(m.instanceId, m.issueKey, m.date);
+  const projectKey = meta ? meta.projectKey : (m.issueKey.split('-')[0] || '').toUpperCase();
+  const color = projectColor(projectKey);
+  const base = meta ? meta.link.split('/browse/')[0] : '';
+  const issueUrl = base ? `${base}/browse/${m.issueKey}` : '#';
+  const tz = (meta && meta.tz) || (state.data && state.data.timeZone) || '';
+  const allMode = state.activeInstanceId === 'all';
+
+  $('wlTitle').textContent = `${m.issueKey} · ${fmtDayHeading(m.date)}`;
+
+  const ctx = $('wlContext');
+  ctx.style.borderLeftColor = color;
+  ctx.innerHTML =
+    `<a class="wl-key" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(m.issueKey)}</a>` +
+    (meta && meta.issueSummary
+      ? `<div class="wl-summary">${escapeHtml(meta.issueSummary)}</div>`
+      : '') +
+    `<div class="wl-sub">` +
+    `<span class="chip project" style="background:${color}">${escapeHtml(projectKey)}</span>` +
+    (allMode && meta && meta.instanceName
+      ? `<span class="chip instance">${escapeHtml(meta.instanceName)}</span>`
+      : '') +
+    `</div>`;
+
+  const editId = m.editId;
+  $('wlList').innerHTML = entries
+    .map((e) => {
+      const wid = escapeHtml(String(e.worklogId));
+      const timeStr = escapeHtml(e.timeSpent || fmtTime(e.timeSpentSeconds));
+      if (editId && String(e.worklogId) === String(editId)) {
+        return `<li class="wl-item wl-editing">
+          <label class="field">Date &amp; time
+            <input type="datetime-local" id="wledit_started" value="${isoToLocalInput(e.started, e.tz)}" />
+          </label>
+          <label class="field">Time logged
+            <input type="text" id="wledit_time" value="${timeStr}" autocomplete="off" />
+          </label>
+          <label class="field">Work description
+            <textarea id="wledit_comment" rows="2">${escapeHtml(e.comment || '')}</textarea>
+          </label>
+          <div class="wl-item-actions">
+            <button class="pill ghost" data-act="cancel">Cancel</button>
+            <button class="pill primary" data-act="save" data-id="${wid}">Save changes</button>
+          </div>
+        </li>`;
+      }
+      const comment = e.comment
+        ? `<div class="wl-item-comment">${escapeHtml(e.comment)}</div>`
+        : '';
+      return `<li class="wl-item">
+        <div class="wl-item-top">
+          <span class="wl-item-clock">${fmtClock(e.started, e.tz)}</span>
+          <span class="wl-item-time">${timeStr}</span>
+        </div>
+        ${comment}
+        <div class="wl-item-actions">
+          <a class="wl-item-open" href="${e.link}" target="_blank" rel="noopener">Open in Jira ↗</a>
+          <span class="wl-item-spacer"></span>
+          <button class="wl-linkbtn" data-act="edit" data-id="${wid}">Edit</button>
+          <button class="wl-linkbtn danger" data-act="del" data-id="${wid}">Delete</button>
+        </div>
+      </li>`;
+    })
+    .join('');
+
+  $('wlTzNote').textContent = tz
+    ? `Sent to Jira in ${tzLabel(tz)}, exactly as entered.`
+    : 'Sent to Jira exactly as entered.';
+}
+
+function showWlError(msg) {
+  $('wlError').textContent = msg;
+  $('wlError').hidden = false;
+}
+
+// Shared validation for every worklog form. Returns an error string, or null.
+function validateWorklogFields(started, timeSpent) {
+  if (!started) return 'Pick a date & time.';
+  if (!timeSpent) return 'Enter how much time to log, e.g. “1h 30m”.';
+  if (!/^\s*(\d+(?:\.\d+)?\s*[wdhmWDHM]\s*)+$/.test(timeSpent)) {
+    return 'Time format looks off — use Jira units like “1h 30m”, “2h”, or “45m”.';
+  }
+  return null;
+}
+
+async function submitWorklog() {
+  const m = state.worklogModal;
+  if (!m) return;
+  const started = $('wl_started').value;
+  const timeSpent = $('wl_time').value.trim();
+  const comment = $('wl_comment').value;
+  $('wlOk').hidden = true;
+  const invalid = validateWorklogFields(started, timeSpent);
+  $('wlError').hidden = true;
+  if (invalid) return showWlError(invalid);
+
+  showLoading(true);
+  $('logWorkBtn').disabled = true;
+  try {
+    await api('/api/worklog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: m.instanceId,
+        issueKey: m.issueKey,
+        started,
+        timeSpent,
+        comment,
+      }),
+    });
+    $('wl_time').value = '';
+    $('wl_comment').value = '';
+    $('wlOk').textContent = `Logged ${timeSpent} on ${m.issueKey}.`;
+    $('wlOk').hidden = false;
+    await loadData(); // refresh table + totals
+    if (state.worklogModal) renderWorklogModalBody(); // still open → refresh its list
+  } catch (err) {
+    showWlError(err.message || 'Could not log work.');
+  } finally {
+    showLoading(false);
+    $('logWorkBtn').disabled = false;
+  }
+}
+
+async function saveWorklogEdit(worklogId) {
+  const m = state.worklogModal;
+  if (!m) return;
+  const started = $('wledit_started').value;
+  const timeSpent = $('wledit_time').value.trim();
+  const comment = $('wledit_comment').value;
+  $('wlOk').hidden = true;
+  const invalid = validateWorklogFields(started, timeSpent);
+  $('wlError').hidden = true;
+  if (invalid) return showWlError(invalid);
+
+  showLoading(true);
+  try {
+    await api('/api/worklog', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: m.instanceId,
+        issueKey: m.issueKey,
+        worklogId,
+        started,
+        timeSpent,
+        comment,
+      }),
+    });
+    m.editId = null;
+    $('wlOk').textContent = 'Worklog updated.';
+    $('wlOk').hidden = false;
+    await loadData();
+    if (state.worklogModal) renderWorklogModalBody();
+  } catch (err) {
+    showWlError(err.message || 'Could not update worklog.');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function deleteWorklogEntry(worklogId) {
+  const m = state.worklogModal;
+  if (!m) return;
+  if (!window.confirm('Delete this worklog? This cannot be undone.')) return;
+  $('wlOk').hidden = true;
+  $('wlError').hidden = true;
+  showLoading(true);
+  try {
+    await api('/api/worklog', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instanceId: m.instanceId, issueKey: m.issueKey, worklogId }),
+    });
+    $('wlOk').textContent = 'Worklog deleted.';
+    $('wlOk').hidden = false;
+    await loadData();
+    if (state.worklogModal) renderWorklogModalBody();
+  } catch (err) {
+    showWlError(err.message || 'Could not delete worklog.');
+  } finally {
+    showLoading(false);
+  }
+}
+
+/* ================================================================== */
+/* "Log new worklog" — pick instance + ticket, then log                */
+/* ================================================================== */
+
+function populateNwInstances() {
+  const sel = $('nw_instance');
+  sel.innerHTML = state.instances
+    .map((i) => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)}</option>`)
+    .join('');
+  if (state.activeInstanceId && state.activeInstanceId !== 'all') {
+    sel.value = state.activeInstanceId;
+  }
+}
+
+// Any change to the instance/ticket invalidates a previous check.
+function resetNwCheck() {
+  state.newWorklog = null;
+  $('nw_result').hidden = true;
+  $('nw_form').hidden = true;
+  $('nw_logBtn').hidden = true;
+  $('nw_ok').hidden = true;
+}
+
+function showNwError(msg) {
+  $('nw_error').textContent = msg;
+  $('nw_error').hidden = false;
+}
+
+function openNewWorklog() {
+  if (!state.instances.length) {
+    setStatus('Add a Jira instance first.', true);
+    openSettings();
+    return;
+  }
+  resetNwCheck();
+  populateNwInstances();
+  $('nw_key').value = '';
+  $('nw_time').value = '';
+  $('nw_comment').value = '';
+  $('nw_started').value = `${todayYmd()}T09:00`;
+  $('nw_error').hidden = true;
+  $('newWorklogModal').hidden = false;
+  $('nw_key').focus();
+}
+
+function closeNewWorklog() {
+  $('newWorklogModal').hidden = true;
+  state.newWorklog = null;
+}
+
+async function checkTicket() {
+  const instanceId = $('nw_instance').value;
+  const key = $('nw_key').value.trim();
+  $('nw_error').hidden = true;
+  $('nw_ok').hidden = true;
+  if (!key) return showNwError('Enter a ticket id, e.g. TIC-123.');
+
+  showLoading(true);
+  $('nw_checkBtn').disabled = true;
+  try {
+    const r = await api(
+      `/api/issue?instance=${encodeURIComponent(instanceId)}&key=${encodeURIComponent(key)}`
+    );
+    state.newWorklog = { instanceId, issueKey: r.key, summary: r.summary, tz: r.timeZone || '' };
+    const res = $('nw_result');
+    res.className = 'nw-result ok';
+    res.innerHTML =
+      `<span class="nw-found-key">✓ ${escapeHtml(r.key)}</span>` +
+      `<span class="nw-found-summary">${escapeHtml(r.summary || '(no summary)')}</span>`;
+    res.hidden = false;
+    $('nw_tzNote').textContent = r.timeZone
+      ? `Sent to Jira in ${tzLabel(r.timeZone)}, exactly as entered.`
+      : 'Sent to Jira exactly as entered.';
+    $('nw_form').hidden = false;
+    $('nw_logBtn').hidden = false;
+    $('nw_time').focus();
+  } catch (err) {
+    resetNwCheck();
+    const res = $('nw_result');
+    res.className = 'nw-result bad';
+    res.textContent = err.message || 'Could not find that ticket.';
+    res.hidden = false;
+  } finally {
+    showLoading(false);
+    $('nw_checkBtn').disabled = false;
+  }
+}
+
+async function submitNewWorklog() {
+  const nw = state.newWorklog;
+  if (!nw) return showNwError('Check a ticket first.');
+  const started = $('nw_started').value;
+  const timeSpent = $('nw_time').value.trim();
+  const comment = $('nw_comment').value;
+  $('nw_ok').hidden = true;
+  const invalid = validateWorklogFields(started, timeSpent);
+  $('nw_error').hidden = true;
+  if (invalid) return showNwError(invalid);
+
+  showLoading(true);
+  $('nw_logBtn').disabled = true;
+  try {
+    await api('/api/worklog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: nw.instanceId,
+        issueKey: nw.issueKey,
+        started,
+        timeSpent,
+        comment,
+      }),
+    });
+    $('nw_time').value = '';
+    $('nw_comment').value = '';
+    $('nw_ok').textContent = `Logged ${timeSpent} on ${nw.issueKey}.`;
+    $('nw_ok').hidden = false;
+    await loadData(); // reflect it in the current view if applicable
+  } catch (err) {
+    showNwError(err.message || 'Could not log work.');
+  } finally {
+    showLoading(false);
+    $('nw_logBtn').disabled = false;
+  }
+}
+
+/* ================================================================== */
 /* Events                                                             */
 /* ================================================================== */
 
@@ -1175,6 +1557,43 @@ function wireEvents() {
   $('instanceSelect').addEventListener('change', (e) => switchInstance(e.target.value));
   $('refreshBtn').addEventListener('click', loadData);
 
+  // Table cell → worklog view/add modal
+  $('worklogTable').addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-issue]');
+    if (!td) return;
+    openWorklogModal(td.dataset.instance, td.dataset.issue, td.dataset.date);
+  });
+  $('closeWorklog').addEventListener('click', closeWorklog);
+  $('cancelWorklog').addEventListener('click', closeWorklog);
+  $('logWorkBtn').addEventListener('click', submitWorklog);
+  // Edit / delete / save / cancel on existing worklogs (event delegation).
+  $('wlList').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn || !state.worklogModal) return;
+    const act = btn.dataset.act;
+    if (act === 'edit') {
+      state.worklogModal.editId = btn.dataset.id;
+      renderWorklogModalBody();
+    } else if (act === 'cancel') {
+      state.worklogModal.editId = null;
+      renderWorklogModalBody();
+    } else if (act === 'save') {
+      saveWorklogEdit(btn.dataset.id);
+    } else if (act === 'del') {
+      deleteWorklogEntry(btn.dataset.id);
+    }
+  });
+  $('worklogModal').addEventListener('click', (e) => {
+    if (e.target === $('worklogModal')) closeWorklog();
+  });
+  // Enter in the time field submits (textarea keeps its newline behaviour).
+  $('wl_time').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitWorklog();
+    }
+  });
+
   // Legend: click a project to show/hide it
   $('legend').addEventListener('click', (e) => {
     const item = e.target.closest('.legend-item');
@@ -1183,6 +1602,30 @@ function wireEvents() {
     if (state.hiddenProjects.has(key)) state.hiddenProjects.delete(key);
     else state.hiddenProjects.add(key);
     render();
+  });
+
+  // Log new worklog modal
+  $('newWorklogBtn').addEventListener('click', openNewWorklog);
+  $('closeNewWorklog').addEventListener('click', closeNewWorklog);
+  $('cancelNewWorklog').addEventListener('click', closeNewWorklog);
+  $('nw_checkBtn').addEventListener('click', checkTicket);
+  $('nw_logBtn').addEventListener('click', submitNewWorklog);
+  $('nw_instance').addEventListener('change', resetNwCheck);
+  $('nw_key').addEventListener('input', resetNwCheck);
+  $('nw_key').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      checkTicket();
+    }
+  });
+  $('nw_time').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitNewWorklog();
+    }
+  });
+  $('newWorklogModal').addEventListener('click', (e) => {
+    if (e.target === $('newWorklogModal')) closeNewWorklog();
   });
 
   // Rates modal
@@ -1233,6 +1676,14 @@ function wireEvents() {
     }
     if (!$('ratesModal').hidden) {
       if (e.key === 'Escape') closeRates();
+      return;
+    }
+    if (!$('worklogModal').hidden) {
+      if (e.key === 'Escape') closeWorklog();
+      return;
+    }
+    if (!$('newWorklogModal').hidden) {
+      if (e.key === 'Escape') closeNewWorklog();
       return;
     }
     if (e.key === 'ArrowLeft') shiftRange(-1);
