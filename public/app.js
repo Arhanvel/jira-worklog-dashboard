@@ -21,6 +21,62 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 /* ================================================================== */
+/* Persisted preferences (survive reloads)                            */
+/* ================================================================== */
+
+const LS_RANGE = 'jwd_range'; // { from, to, preset }
+const LS_VIEW = 'jwd_view'; // 'calendar' | 'table'
+
+function persistRange() {
+  try {
+    localStorage.setItem(
+      LS_RANGE,
+      JSON.stringify({ from: state.range.from, to: state.range.to, preset: state.preset })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+function persistView() {
+  try {
+    localStorage.setItem(LS_VIEW, state.viewMode);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Restore the last view mode into state (before the first render).
+function restoreViewMode() {
+  let v = null;
+  try {
+    v = localStorage.getItem(LS_VIEW);
+  } catch {
+    /* ignore */
+  }
+  if (v === 'calendar' || v === 'table') state.viewMode = v;
+}
+
+// Restore the last date range without loading. A named preset is re-evaluated
+// (so "This month" tracks the calendar), while a custom range is restored
+// verbatim. Falls back to the default preset when nothing valid is stored.
+function restoreRange() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(LS_RANGE) || 'null');
+  } catch {
+    /* ignore */
+  }
+  const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (saved && saved.preset && saved.preset !== 'custom') {
+    applyPreset(saved.preset, false);
+  } else if (saved && ymdRe.test(saved.from || '') && ymdRe.test(saved.to || '')) {
+    setRange(saved.from, saved.to, 'custom', false);
+  } else {
+    applyPreset('thisMonth', false);
+  }
+}
+
+/* ================================================================== */
 /* Project colour-coding                                              */
 /* ================================================================== */
 
@@ -145,6 +201,14 @@ function fmtClock(iso, tz) {
     }
   }
   return new Date(iso).toLocaleTimeString(undefined, opt);
+}
+
+// "09:00 – 10:30": the worklog's start clock through start + duration, both in tz.
+function fmtTimeRange(iso, seconds, tz) {
+  const start = fmtClock(iso, tz);
+  const endMs = new Date(iso).getTime() + (seconds || 0) * 1000;
+  const end = fmtClock(new Date(endMs).toISOString(), tz);
+  return `${start} – ${end}`;
 }
 
 // An ISO instant as a datetime-local value ("YYYY-MM-DDTHH:mm") in zone `tz`,
@@ -282,6 +346,7 @@ function setRange(from, to, preset, load = true) {
   $('toDate').value = to;
   $('presetSelect').value = state.preset;
   $('rangeLabel').textContent = fmtRangeLabel(from, to);
+  persistRange();
   if (load) loadData();
 }
 
@@ -547,7 +612,6 @@ function renderDetail() {
         allMode && e.instanceName
           ? `<span class="chip instance">${escapeHtml(e.instanceName)}</span>`
           : '',
-        `<span class="chip">${fmtClock(e.started, e.tz)}</span>`,
         e.issueType ? `<span class="chip">${escapeHtml(e.issueType)}</span>` : '',
         e.statusName ? `<span class="chip">${escapeHtml(e.statusName)}</span>` : '',
       ]
@@ -573,6 +637,7 @@ function renderDetail() {
             </span>
           </div>
           <p class="entry-summary">${escapeHtml(e.issueSummary)}</p>
+          <div class="entry-timerange">${fmtTimeRange(e.started, e.timeSpentSeconds, e.tz)}</div>
           <div class="entry-meta">${meta}</div>
           ${comment}
           <a class="entry-open" href="${e.link}" target="_blank" rel="noopener">Open worklog in Jira ↗</a>
@@ -1166,6 +1231,19 @@ async function saveRates() {
 /* Worklog modal — view a cell's worklogs and add a new one           */
 /* ================================================================== */
 
+// Default "date & time" for a new worklog on `date`. The working day starts at
+// 09:00; every hour already logged that day pushes the next entry later, so the
+// field pre-fills with the moment the day's logged time currently runs out.
+// (Empty day → 09:00; a single 1h entry → 10:00; 1h30m + 3h + 2h15m → 15:45.)
+function defaultStartFor(date) {
+  const day = state.data && state.data.days[date];
+  const loggedSec = day ? day.entries.reduce((s, e) => s + (e.timeSpentSeconds || 0), 0) : 0;
+  const startMin = Math.min(9 * 60 + Math.round(loggedSec / 60), 23 * 60 + 59); // stay on the day
+  const hh = String(Math.floor(startMin / 60)).padStart(2, '0');
+  const mm = String(startMin % 60).padStart(2, '0');
+  return `${date}T${hh}:${mm}`;
+}
+
 // Entries for one task on one day, earliest first.
 function cellEntriesFor(instanceId, issueKey, date) {
   const day = state.data && state.data.days[date];
@@ -1192,7 +1270,7 @@ function openWorklogModal(instanceId, issueKey, date) {
   $('wlOk').hidden = true;
   $('wl_time').value = '';
   $('wl_comment').value = '';
-  $('wl_started').value = `${date}T09:00`;
+  $('wl_started').value = defaultStartFor(date);
   renderWorklogModalBody();
   $('worklogModal').hidden = false;
   $('wl_time').focus();
@@ -1431,7 +1509,7 @@ function openNewWorklog() {
   $('nw_key').value = '';
   $('nw_time').value = '';
   $('nw_comment').value = '';
-  $('nw_started').value = `${todayYmd()}T09:00`;
+  $('nw_started').value = defaultStartFor(todayYmd());
   $('nw_error').hidden = true;
   $('newWorklogModal').hidden = false;
   $('nw_key').focus();
@@ -1546,10 +1624,12 @@ function wireEvents() {
   // View toggle
   $('calBtn').addEventListener('click', () => {
     state.viewMode = 'calendar';
+    persistView();
     render();
   });
   $('tableBtn').addEventListener('click', () => {
     state.viewMode = 'table';
+    persistView();
     render();
   });
 
@@ -1699,7 +1779,8 @@ async function init() {
   renderWeekdayRow();
   populateTzOptions();
   wireEvents();
-  applyPreset('thisMonth', false); // sets the default range without loading yet
+  restoreViewMode(); // last calendar/table choice, before the first render
+  restoreRange(); // last date range, without loading yet
   render();
 
   try {

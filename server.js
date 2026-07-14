@@ -633,6 +633,35 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
+// Issues whose worklogs were just changed from the dashboard, per instance.
+// Jira's worklog search index (the worklogAuthor/worklogDate JQL) can lag a few
+// seconds behind a write, so an issue that had no worklogs in range yet may be
+// missing from searchWorklogIssues right after logging. We remember these keys
+// briefly and fetch them directly (by id) so the change shows without a manual
+// refresh. (The table never hit this because it only logs against issues already
+// in the pivot, whose worklogs are always fetched directly by id.)
+const recentlyTouched = new Map(); // instanceId -> Map(issueKeyUpper -> expiresAtMs)
+const TOUCH_TTL_MS = 5 * 60 * 1000;
+
+function noteTouchedIssue(instanceId, issueKey) {
+  if (!instanceId || !issueKey) return;
+  let m = recentlyTouched.get(instanceId);
+  if (!m) recentlyTouched.set(instanceId, (m = new Map()));
+  m.set(String(issueKey).toUpperCase(), Date.now() + TOUCH_TTL_MS);
+}
+
+function touchedKeys(instanceId) {
+  const m = recentlyTouched.get(instanceId);
+  if (!m) return [];
+  const now = Date.now();
+  const keys = [];
+  for (const [key, expiresAt] of m) {
+    if (expiresAt > now) keys.push(key);
+    else m.delete(key);
+  }
+  return keys;
+}
+
 // Find issues the current user logged work on in [from, to].
 async function searchWorklogIssues(inst, from, to) {
   const jql =
@@ -865,6 +894,24 @@ async function collectWorklogs(inst, from, to) {
   const pad = inst.timeZone ? 1 : 0;
   const issues = await searchWorklogIssues(inst, ymdShift(from, -pad), ymdShift(to, pad));
 
+  // Fold in any issues just written from the dashboard that the worklog index
+  // may not have caught up on yet, so a fresh log/edit shows without a refresh.
+  const haveKeys = new Set(issues.map((i) => String(i.key || '').toUpperCase()));
+  const missing = touchedKeys(inst.id).filter((k) => !haveKeys.has(k));
+  if (missing.length) {
+    const extra = await mapLimit(missing, 6, async (key) => {
+      try {
+        return await jiraFetch(
+          inst,
+          `/issue/${encodeURIComponent(key)}?fields=summary,issuetype,status`
+        );
+      } catch {
+        return null; // deleted, renamed, or no longer accessible — just skip it
+      }
+    });
+    for (const issue of extra) if (issue && issue.id) issues.push(issue);
+  }
+
   const startedAfter = Date.parse(`${from}T00:00:00Z`) - (2 + pad) * 86400000;
   const startedBefore = Date.parse(`${to}T23:59:59Z`) + (2 + pad) * 86400000;
 
@@ -1071,6 +1118,7 @@ app.post('/api/worklog', async (req, res) => {
       method: 'POST',
       body: JSON.stringify(payload.body),
     });
+    noteTouchedIssue(inst.id, issueKey);
     res.json({ ok: true, worklog: pickWorklog(w) });
   } catch (err) {
     res.status(authStatus(err)).json(connError(err));
@@ -1102,6 +1150,7 @@ app.put('/api/worklog', async (req, res) => {
       `/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
       { method: 'PUT', body: JSON.stringify(payload.body) }
     );
+    noteTouchedIssue(inst.id, issueKey);
     res.json({ ok: true, worklog: pickWorklog(w) });
   } catch (err) {
     res.status(authStatus(err)).json(connError(err));
@@ -1124,6 +1173,7 @@ app.delete('/api/worklog', async (req, res) => {
       `/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(worklogId)}`,
       { method: 'DELETE' }
     );
+    noteTouchedIssue(inst.id, issueKey);
     res.json({ ok: true });
   } catch (err) {
     res.status(authStatus(err)).json(connError(err));
