@@ -43,8 +43,8 @@
           <option value="last30">Last 30 days</option>
           <option value="custom">Custom…</option>
         </select>
-        <label class="date-field">From <input type="date" id="fromDate" /></label>
-        <label class="date-field">To <input type="date" id="toDate" /></label>
+        <span class="date-field">From <button type="button" id="fromDate"></button></span>
+        <span class="date-field">To <button type="button" id="toDate"></button></span>
         <span id="rangeLabel" class="range-label"></span>
       </div>
 
@@ -311,7 +311,11 @@
         <div class="wl-add">
           <label class="field">
             Date &amp; time
-            <input type="datetime-local" id="wl_started" />
+            <div class="dt-row">
+              <button type="button" id="wl_date"></button>
+              <input type="text" class="dt-time" id="wl_time_of_day" placeholder="09:00"
+                inputmode="numeric" autocomplete="off" aria-label="Time of day" />
+            </div>
             <span class="opt" id="wlTzNote"></span>
           </label>
           <label class="field">
@@ -358,7 +362,11 @@
         <div id="nw_form" hidden>
           <label class="field">
             Date &amp; time
-            <input type="datetime-local" id="nw_started" />
+            <div class="dt-row">
+              <button type="button" id="nw_date"></button>
+              <input type="text" class="dt-time" id="nw_time_of_day" placeholder="09:00"
+                inputmode="numeric" autocomplete="off" aria-label="Time of day" />
+            </div>
             <span class="opt" id="nw_tzNote"></span>
           </label>
           <label class="field">
@@ -382,6 +390,7 @@
 
     <div class="loading" id="loading" hidden><div class="spinner"></div></div>
 
+    <script src="datepicker.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

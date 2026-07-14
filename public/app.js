@@ -233,6 +233,81 @@ function isoToLocalInput(iso, tz) {
   }
 }
 
+/* ---------- Custom date pickers ---------- */
+
+// Every custom date picker on the page, keyed by a short name.
+const datePickers = {};
+
+// "9" -> "09:00", "9:5" -> "09:05", "1430" -> "14:30". null if unparseable.
+function normalizeTimeOfDay(s) {
+  const t = String(s == null ? '' : s).trim();
+  if (!t) return null;
+  let h, m;
+  const colon = t.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (colon) {
+    h = +colon[1];
+    m = +colon[2];
+  } else if (/^\d{1,2}$/.test(t)) {
+    h = +t;
+    m = 0;
+  } else if (/^\d{3,4}$/.test(t)) {
+    h = Math.floor(+t / 100);
+    m = +t % 100;
+  } else {
+    return null;
+  }
+  if (h > 23 || m > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Combine a date picker's date with a time-of-day field into "YYYY-MM-DDTHH:mm".
+// Returns '' when either part is missing/invalid — callers treat that as "no value".
+function composeStarted(dateKey, timeInputId) {
+  const dp = datePickers[dateKey];
+  const date = dp ? dp.getValue() : '';
+  const time = normalizeTimeOfDay($(timeInputId).value);
+  if (!date || !time) return '';
+  return `${date}T${time}`;
+}
+
+// Split a "YYYY-MM-DDTHH:mm" value across a date picker + time field.
+function setStartedControls(dateKey, timeInputId, value) {
+  const [date, time] = String(value || '').split('T');
+  if (datePickers[dateKey]) datePickers[dateKey].setValue(date || '');
+  $(timeInputId).value = time || '';
+}
+
+// Reformat a time field to canonical HH:mm on blur, when it parses.
+function wireTimeField(id) {
+  $(id).addEventListener('blur', (e) => {
+    const t = normalizeTimeOfDay(e.target.value);
+    if (t) e.target.value = t;
+  });
+}
+
+// Create every date picker once the DOM is ready. Must run before any setRange.
+function setupDatePickers() {
+  const onRangeChange = () => {
+    const from = datePickers.fromDate.getValue();
+    const to = datePickers.toDate.getValue();
+    if (!from || !to) return;
+    if (from > to) setRange(to, from, 'custom');
+    else setRange(from, to, 'custom');
+  };
+  datePickers.fromDate = createDatePicker($('fromDate'), {
+    placeholder: 'From',
+    onChange: onRangeChange,
+  });
+  datePickers.toDate = createDatePicker($('toDate'), {
+    placeholder: 'To',
+    onChange: onRangeChange,
+  });
+  datePickers.wl_date = createDatePicker($('wl_date'), { placeholder: 'Pick a date' });
+  datePickers.nw_date = createDatePicker($('nw_date'), { placeholder: 'Pick a date' });
+  wireTimeField('wl_time_of_day');
+  wireTimeField('nw_time_of_day');
+}
+
 /* ---------- Time-zone offsets ---------- */
 
 // Format offset minutes as "+HH:MM" / "-HH:MM".
@@ -342,8 +417,8 @@ function setRange(from, to, preset, load = true) {
   state.range = { from, to };
   state.preset = preset || 'custom';
   state.selectedDate = null;
-  $('fromDate').value = from;
-  $('toDate').value = to;
+  datePickers.fromDate.setValue(from);
+  datePickers.toDate.setValue(to);
   $('presetSelect').value = state.preset;
   $('rangeLabel').textContent = fmtRangeLabel(from, to);
   persistRange();
@@ -1270,7 +1345,7 @@ function openWorklogModal(instanceId, issueKey, date) {
   $('wlOk').hidden = true;
   $('wl_time').value = '';
   $('wl_comment').value = '';
-  $('wl_started').value = defaultStartFor(date);
+  setStartedControls('wl_date', 'wl_time_of_day', defaultStartFor(date));
   renderWorklogModalBody();
   $('worklogModal').hidden = false;
   $('wl_time').focus();
@@ -1317,7 +1392,11 @@ function renderWorklogModalBody() {
       if (editId && String(e.worklogId) === String(editId)) {
         return `<li class="wl-item wl-editing">
           <label class="field">Date &amp; time
-            <input type="datetime-local" id="wledit_started" value="${isoToLocalInput(e.started, e.tz)}" />
+            <div class="dt-row">
+              <button type="button" id="wledit_date"></button>
+              <input type="text" class="dt-time" id="wledit_time_of_day" placeholder="09:00"
+                inputmode="numeric" autocomplete="off" aria-label="Time of day" />
+            </div>
           </label>
           <label class="field">Time logged
             <input type="text" id="wledit_time" value="${timeStr}" autocomplete="off" />
@@ -1350,6 +1429,16 @@ function renderWorklogModalBody() {
     })
     .join('');
 
+  // The inline edit row is rebuilt each render — (re)create its date picker.
+  if (editId) {
+    const editEntry = entries.find((e) => String(e.worklogId) === String(editId));
+    if (editEntry && $('wledit_date')) {
+      datePickers.wledit = createDatePicker($('wledit_date'), { placeholder: 'Pick a date' });
+      setStartedControls('wledit', 'wledit_time_of_day', isoToLocalInput(editEntry.started, editEntry.tz));
+      wireTimeField('wledit_time_of_day');
+    }
+  }
+
   $('wlTzNote').textContent = tz
     ? `Sent to Jira in ${tzLabel(tz)}, exactly as entered.`
     : 'Sent to Jira exactly as entered.';
@@ -1373,7 +1462,7 @@ function validateWorklogFields(started, timeSpent) {
 async function submitWorklog() {
   const m = state.worklogModal;
   if (!m) return;
-  const started = $('wl_started').value;
+  const started = composeStarted('wl_date', 'wl_time_of_day');
   const timeSpent = $('wl_time').value.trim();
   const comment = $('wl_comment').value;
   $('wlOk').hidden = true;
@@ -1412,7 +1501,7 @@ async function submitWorklog() {
 async function saveWorklogEdit(worklogId) {
   const m = state.worklogModal;
   if (!m) return;
-  const started = $('wledit_started').value;
+  const started = composeStarted('wledit', 'wledit_time_of_day');
   const timeSpent = $('wledit_time').value.trim();
   const comment = $('wledit_comment').value;
   $('wlOk').hidden = true;
@@ -1509,7 +1598,7 @@ function openNewWorklog() {
   $('nw_key').value = '';
   $('nw_time').value = '';
   $('nw_comment').value = '';
-  $('nw_started').value = defaultStartFor(todayYmd());
+  setStartedControls('nw_date', 'nw_time_of_day', defaultStartFor(todayYmd()));
   $('nw_error').hidden = true;
   $('newWorklogModal').hidden = false;
   $('nw_key').focus();
@@ -1561,7 +1650,7 @@ async function checkTicket() {
 async function submitNewWorklog() {
   const nw = state.newWorklog;
   if (!nw) return showNwError('Check a ticket first.');
-  const started = $('nw_started').value;
+  const started = composeStarted('nw_date', 'nw_time_of_day');
   const timeSpent = $('nw_time').value.trim();
   const comment = $('nw_comment').value;
   $('nw_ok').hidden = true;
@@ -1608,18 +1697,7 @@ function wireEvents() {
     if (e.target.value === 'custom') return;
     applyPreset(e.target.value);
   });
-  const onDate = () => {
-    const from = $('fromDate').value;
-    const to = $('toDate').value;
-    if (!from || !to) return;
-    if (from > to) {
-      setRange(to, from, 'custom');
-    } else {
-      setRange(from, to, 'custom');
-    }
-  };
-  $('fromDate').addEventListener('change', onDate);
-  $('toDate').addEventListener('change', onDate);
+  // (From/To pickers apply the range themselves via their onChange — see setupDatePickers.)
 
   // View toggle
   $('calBtn').addEventListener('click', () => {
@@ -1778,6 +1856,7 @@ function wireEvents() {
 async function init() {
   renderWeekdayRow();
   populateTzOptions();
+  setupDatePickers(); // must precede restoreRange(), which sets picker values
   wireEvents();
   restoreViewMode(); // last calendar/table choice, before the first render
   restoreRange(); // last date range, without loading yet
