@@ -391,6 +391,64 @@ function escapeHtml(s) {
 }
 
 /* ================================================================== */
+/* Toasts                                                             */
+/* ================================================================== */
+
+let _toastTimer = null;
+function showToast(msg, isError = false) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.toggle('error', !!isError);
+  el.hidden = false;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 2800);
+}
+
+/* ================================================================== */
+/* Instance slugs — short handles for the quick-log bar (vvt:TIC-1)   */
+/* ================================================================== */
+
+let _slugMap = null; // { byId: Map<id, slug>, bySlug: Map<slug, id> }
+
+function rebuildSlugs() {
+  const byId = new Map();
+  const bySlug = new Map();
+  for (const i of state.instances) {
+    const base = (String(i.name || '').toLowerCase().match(/[a-z0-9]+/g) || ['jira'])[0];
+    let slug = base;
+    let n = 2;
+    while (bySlug.has(slug)) slug = base + n++;
+    byId.set(i.id, slug);
+    bySlug.set(slug, i.id);
+  }
+  _slugMap = { byId, bySlug };
+}
+function slugOf(id) {
+  if (!_slugMap) rebuildSlugs();
+  return _slugMap.byId.get(id) || '';
+}
+function instanceBySlug(slug) {
+  if (!_slugMap) rebuildSlugs();
+  return _slugMap.bySlug.get(String(slug || '').toLowerCase()) || null;
+}
+function allSlugs() {
+  if (!_slugMap) rebuildSlugs();
+  return [..._slugMap.bySlug.keys()];
+}
+
+function initialsOf(name) {
+  return String(name || '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0] || '')
+    .join('')
+    .toUpperCase();
+}
+
+/* ================================================================== */
 /* Range presets                                                      */
 /* ================================================================== */
 
@@ -452,7 +510,10 @@ function setRange(from, to, preset, load = true) {
   datePickers.fromDate.setValue(from);
   datePickers.toDate.setValue(to);
   $('presetSelect').value = state.preset;
-  $('rangeLabel').textContent = fmtRangeLabel(from, to);
+  const label = fmtRangeLabel(from, to);
+  const nDays = daysInclusive(from, to);
+  $('rangeLabel').textContent = `${label} · ${nDays} day${nDays === 1 ? '' : 's'}`;
+  $('brandRange').textContent = label;
   persistRange();
   if (load) loadData();
 }
@@ -489,7 +550,7 @@ async function loadData() {
     state.data = await api(
       `/api/worklogs?instance=${encodeURIComponent(state.activeInstanceId)}&from=${from}&to=${to}`
     );
-    $('userBadge').textContent = state.data.user.displayName || '';
+    setUser(state.data.user.displayName || '');
     if (state.activeInstanceId === 'all') {
       const errs = state.data.errors || [];
       const okCount = (state.data.instances || []).length - errs.length;
@@ -520,8 +581,7 @@ function render() {
   $('tableView').hidden = state.viewMode !== 'table';
   $('calBtn').classList.toggle('active', state.viewMode === 'calendar');
   $('tableBtn').classList.toggle('active', state.viewMode === 'table');
-  document.body.classList.toggle('table-mode', state.viewMode === 'table');
-  renderLegend();
+  renderSidebar();
   renderSummary();
   if (state.viewMode === 'calendar') {
     renderCalendar();
@@ -547,121 +607,197 @@ function gatherProjects(data) {
   return [...m.values()].sort((a, b) => b.total - a.total);
 }
 
-function renderLegend() {
-  const el = $('legend');
-  if (!state.data) {
-    el.hidden = true;
-    return;
+/* ---------- sidebar: instances, projects, footer ---------- */
+
+// Seconds logged per instance across the loaded data (visible projects only).
+function hoursByInstance() {
+  const m = new Map();
+  if (!state.data) return m;
+  for (const day of Object.values(state.data.days)) {
+    for (const e of visibleEntries(day.entries)) {
+      m.set(e.instanceId, (m.get(e.instanceId) || 0) + e.timeSpentSeconds);
+    }
   }
-  const projects = gatherProjects(state.data);
-  if (projects.length <= 1) {
-    el.hidden = true;
-    return;
-  }
-  const showMoney = hasRates();
-  el.hidden = false;
-  el.innerHTML =
-    '<span class="legend-title">Projects</span>' +
-    projects
-      .map((p) => {
-        const muted = isHidden(p.key) ? ' muted' : '';
-        const money = showMoney
-          ? `<span class="legend-money">${fmtMoney(moneyForSeconds(p.total, p.key))}</span>`
-          : '';
-        return (
-          `<span class="legend-item${muted}" data-project="${escapeHtml(p.key)}" title="Click to show/hide">` +
-          `<span class="swatch" style="background:${p.color}"></span>` +
-          `<span class="legend-key">${escapeHtml(p.key)}</span>` +
-          `<span class="legend-total">${fmtTime(p.total)}</span>${money}</span>`
-        );
-      })
-      .join('');
+  return m;
 }
 
-function renderSummary() {
-  const data = state.data;
-  const moneyItem = $('moneyItem');
-  if (!data) {
-    $('rangeTotal').textContent = '—';
-    $('daysLogged').textContent = '—';
-    $('avgPerDay').textContent = '—';
-    moneyItem.hidden = true;
-    hideGoal();
+function renderSidebarInstances() {
+  const el = $('instanceTabs');
+  if (!state.instances.length) {
+    el.innerHTML = '<div class="inst-row" style="cursor:default">No instances yet</div>';
     return;
   }
+  const perInst = hoursByInstance();
+  const allSeconds = [...perInst.values()].reduce((s, v) => s + v, 0);
+  const rows = [];
+  if (state.instances.length > 1) {
+    rows.push({
+      id: 'all',
+      label: 'All instances',
+      dot: '#7ee787',
+      hrs: state.activeInstanceId === 'all' && allSeconds ? fmtTime(allSeconds) : '',
+      title: 'Show worklogs from every connected instance',
+    });
+  }
+  for (const i of state.instances) {
+    rows.push({
+      id: i.id,
+      label: i.name,
+      dot: i.type === 'cloud' ? '#38bdf8' : '#c084fc',
+      hrs: perInst.has(i.id) ? fmtTime(perInst.get(i.id)) : '',
+      title: `${i.name} — quick-log prefix “${slugOf(i.id)}:”`,
+    });
+  }
+  el.innerHTML = rows
+    .map(
+      (r) =>
+        `<button class="inst-row${r.id === state.activeInstanceId ? ' active' : ''}" ` +
+        `data-id="${escapeHtml(r.id)}" title="${escapeHtml(r.title)}">` +
+        `<span class="inst-dot" style="background:${r.dot};box-shadow:0 0 6px ${r.dot}"></span>` +
+        `<span class="inst-name">${escapeHtml(r.label)}</span>` +
+        `<span class="inst-hrs">${escapeHtml(r.hrs)}</span></button>`
+    )
+    .join('');
+}
+
+function renderSidebarProjects() {
+  const section = $('projectsSection');
+  const el = $('projectChips');
+  const projects = state.data ? gatherProjects(state.data) : [];
+  if (!projects.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const showMoney = hasRates();
+  const max = Math.max(1, ...projects.map((p) => p.total));
+  el.innerHTML = projects
+    .map((p) => {
+      const muted = isHidden(p.key) ? ' muted' : '';
+      const money = showMoney
+        ? ` <span class="chip-money">${escapeHtml(fmtMoney(moneyForSeconds(p.total, p.key)))}</span>`
+        : '';
+      return (
+        `<div class="chip-row${muted}" data-project="${escapeHtml(p.key)}" title="Click to show/hide ${escapeHtml(p.key)}">` +
+        `<div class="chip-top">` +
+        `<span class="chip-key" style="color:${p.color}">${escapeHtml(p.key)}</span>` +
+        `<span class="chip-nums">${fmtTime(p.total)}${money}</span>` +
+        `</div>` +
+        `<div class="chip-track"><div class="chip-fill" style="background:${p.color};width:${Math.round((p.total / max) * 100)}%"></div></div>` +
+        `</div>`
+      );
+    })
+    .join('');
+}
+
+// Strip trailing ".00" from a formatted amount ("$5,000.00" -> "$5,000").
+function fmtMoneyShort(amount) {
+  return fmtMoney(amount).replace(/\.00(?!\d)/, '');
+}
+
+function renderSidebar() {
+  renderSidebarInstances();
+  renderSidebarProjects();
+  $('rateLabel').textContent =
+    state.rates.defaultRate > 0 ? `${fmtMoneyShort(state.rates.defaultRate)}/h` : 'set';
+  $('goalSideLabel').textContent =
+    state.goal.amount > 0 ? fmtMoneyShort(state.goal.amount) : 'set';
+}
+
+function setUser(name) {
+  $('userName').textContent = name || '';
+  $('userAvatar').textContent = initialsOf(name);
+  $('userAvatar').style.display = name ? 'flex' : 'none';
+}
+
+// The single-row stats bar: time stats, money and the goal group.
+function renderSummary() {
+  const el = $('statsBar');
+  const data = state.data;
+  const rangeDays =
+    state.range.from && state.range.to ? daysInclusive(state.range.from, state.range.to) : 0;
+
   let total = 0;
   let loggedDays = 0;
   let money = 0;
-  for (const d of Object.values(data.days)) {
-    const visible = visibleEntries(d.entries);
-    const t = sumSeconds(visible);
-    if (t > 0) {
-      total += t;
-      loggedDays += 1;
-      money += moneyForEntries(visible);
+  if (data) {
+    for (const d of Object.values(data.days)) {
+      const visible = visibleEntries(d.entries);
+      const t = sumSeconds(visible);
+      if (t > 0) {
+        total += t;
+        loggedDays += 1;
+        money += moneyForEntries(visible);
+      }
     }
   }
-  $('rangeTotal').textContent = fmtTime(total);
-  $('daysLogged').textContent = String(loggedDays);
-  $('avgPerDay').textContent = loggedDays ? fmtTime(Math.round(total / loggedDays)) : '0h';
-  if (hasRates()) {
-    $('rangeMoney').textContent = fmtMoney(money);
-    moneyItem.hidden = false;
-  } else {
-    moneyItem.hidden = true;
+
+  const items = [
+    { v: data ? fmtTime(total) : '—', label: 'logged in range' },
+    { v: data ? String(loggedDays) : '—', suffix: ` /${rangeDays}`, label: 'days with worklogs' },
+    {
+      v: data ? (loggedDays ? fmtTime(Math.round(total / loggedDays)) : '0h') : '—',
+      label: 'avg / logged day',
+    },
+  ];
+
+  if (data && hasRates()) {
+    items.push({ v: fmtMoney(money), label: 'earned in range', cls: 'money' });
+    if (state.goal.amount > 0) {
+      const goal = state.goal.amount;
+      const left = goal - money;
+      const wdl = workDaysLeftInRange();
+      const rate = goalHourlyRate(total, money);
+      if (left <= 0) {
+        items.push({
+          v: 'goal reached ✓',
+          suffix: `  ${fmtMoney(goal)}`,
+          label: 'earnings goal',
+          cls: 'money',
+          click: 'goal',
+          tip: 'Click to edit goal',
+        });
+      } else {
+        items.push({
+          v: fmtMoney(left),
+          suffix: ` / ${fmtMoney(goal)}`,
+          label: 'left / goal in range',
+          cls: 'goal',
+          click: 'goal',
+          tip: `${fmtMoney(money)} of ${fmtMoney(goal)} earned in this range — click to edit`,
+        });
+        items.push({ v: String(wdl), label: 'work days left in range' });
+        items.push({
+          v: wdl > 0 && rate > 0 ? fmtTime(Math.round(left / wdl / rate * 3600)) : '—',
+          label: 'needed / work day',
+          tip:
+            wdl > 0 && rate > 0
+              ? `${fmtMoney(left / wdl)} per work day at ${fmtMoney(rate)}/h`
+              : '',
+        });
+      }
+    } else {
+      items.push({
+        v: '+ set goal',
+        label: 'earnings goal',
+        cls: 'faint',
+        click: 'goal',
+        tip: 'Set an earnings goal for this range',
+      });
+    }
   }
-  renderGoal(total, money);
-}
 
-const GOAL_ITEMS = ['goalLeftItem', 'goalDaysItem', 'goalPaceItem'];
-
-function hideGoal() {
-  GOAL_ITEMS.forEach((id) => ($(id).hidden = true));
-}
-
-// The goal tiles: what's left of the target, how many work days remain to earn
-// it in, and the daily pace that implies.
-function renderGoal(seconds, money) {
-  if (!hasGoal()) {
-    hideGoal();
-    return;
-  }
-  GOAL_ITEMS.forEach((id) => ($(id).hidden = false));
-
-  const goal = state.goal.amount;
-  const left = Math.max(0, goal - money);
-  const days = workDaysLeftInRange();
-  const rate = goalHourlyRate(seconds, money);
-  const perDay = days > 0 ? left / days : 0;
-
-  const leftEl = $('goalLeft');
-  leftEl.innerHTML =
-    `${escapeHtml(fmtMoney(left))}<span class="goal-target"> / ${escapeHtml(fmtMoney(goal))}</span>`;
-  leftEl.classList.toggle('done', left <= 0);
-  $('goalLeftItem').title = `${fmtMoney(money)} of ${fmtMoney(goal)} earned in this range`;
-
-  $('goalDays').textContent = String(days);
-
-  const paceEl = $('goalPace');
-  const paceLabel = $('goalPaceLabel');
-  const paceItem = $('goalPaceItem');
-  if (left <= 0) {
-    paceEl.textContent = 'Reached 🎉';
-    paceLabel.textContent = 'goal met for this range';
-    paceItem.title = '';
-  } else if (!days) {
-    paceEl.textContent = '—';
-    paceLabel.textContent = 'no work days left in range';
-    paceItem.title = '';
-  } else if (rate > 0) {
-    paceEl.textContent = fmtTime(Math.round((perDay / rate) * 3600));
-    paceLabel.textContent = 'needed / work day';
-    paceItem.title = `${fmtMoney(perDay)} per work day at ${fmtMoney(rate)}/h`;
-  } else {
-    paceEl.textContent = fmtMoney(perDay);
-    paceLabel.textContent = 'needed / work day';
-    paceItem.title = 'Set a default hourly rate to see this as hours.';
-  }
+  el.innerHTML = items
+    .map(
+      (it) =>
+        `<div class="stat-item${it.click ? ' clickable' : ''}"` +
+        (it.click ? ` data-click="${it.click}"` : '') +
+        (it.tip ? ` title="${escapeHtml(it.tip)}"` : '') +
+        `><div class="stat-value${it.cls ? ' ' + it.cls : ''}">${escapeHtml(it.v)}` +
+        (it.suffix ? `<span class="stat-suffix">${escapeHtml(it.suffix)}</span>` : '') +
+        `</div><div class="stat-label">${escapeHtml(it.label)}</div></div>`
+    )
+    .join('');
 }
 
 /* ================================================================== */
@@ -669,7 +805,7 @@ function renderGoal(seconds, money) {
 /* ================================================================== */
 
 function renderWeekdayRow() {
-  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const names = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
   $('weekdayRow').innerHTML = names.map((n) => `<div class="weekday">${n}</div>`).join('');
 }
 
@@ -706,25 +842,25 @@ function renderCalendar() {
     if (key === state.selectedDate) cell.classList.add('selected');
     if (total > 0) cell.classList.add('has-work');
 
-    let inner = `<div class="day-num">${d.getDate()}</div>`;
+    const count = v && v.entries.length ? `${v.entries.length}e` : '';
+    let inner =
+      `<div class="day-top"><span class="day-num">${d.getDate()}</span>` +
+      `<span class="day-count">${count}</span></div>`;
     if (inRange && total > 0) {
-      const pct = maxSeconds ? Math.max(12, (total / maxSeconds) * 100) : 0;
       const segs = v.breakdown
         .map(
           (b) =>
-            `<span class="day-seg" style="width:${(b.seconds / total) * 100}%;background:${
-              b.color
-            }" title="${escapeHtml(b.key)} · ${fmtTime(b.seconds)}"></span>`
+            `<span class="day-seg" style="width:${Math.max(
+              8,
+              (b.seconds / total) * 100
+            )}%;background:${b.color}" title="${escapeHtml(b.key)} · ${fmtTime(b.seconds)}"></span>`
         )
         .join('');
-      inner += `<div class="day-bar" style="width:${pct}%">${segs}</div>`;
+      inner += `<div class="day-bars">${segs}</div>`;
       inner += `<div class="day-total">${fmtTime(total)}</div>`;
       if (hasRates()) {
         inner += `<div class="day-money">${fmtMoney(moneyForEntries(v.entries))}</div>`;
       }
-      inner += `<div class="day-count">${v.entries.length} ${
-        v.entries.length === 1 ? 'entry' : 'entries'
-      }</div>`;
     }
     cell.innerHTML = inner;
     if (inRange) cell.addEventListener('click', () => selectDay(key));
@@ -754,53 +890,56 @@ function renderDetail() {
   $('detailBody').hidden = false;
   $('detailDate').textContent = fmtDayHeading(key);
   $('detailTotal').innerHTML =
-    fmtTime(sumSeconds(entries)) +
+    `<span class="dur">${fmtTime(sumSeconds(entries))}</span>` +
     (showMoney ? ` <span class="detail-money">${fmtMoney(moneyForEntries(entries))}</span>` : '');
 
   const allMode = state.activeInstanceId === 'all';
   const list = $('entries');
   if (!entries.length) {
-    list.innerHTML = '<li class="detail-empty">No worklogs on this day.</li>';
+    list.innerHTML =
+      '<li class="detail-empty" style="min-height:60px">// no worklogs on this day</li>';
     return;
   }
   list.innerHTML = entries
     .map((e) => {
       const issueUrl = e.link.split('?')[0];
       const color = projectColor(e.projectKey);
-      const meta = [
-        `<span class="chip project" style="background:${color}">${escapeHtml(e.projectKey)}</span>`,
-        allMode && e.instanceName
-          ? `<span class="chip instance">${escapeHtml(e.instanceName)}</span>`
-          : '',
-        e.issueType ? `<span class="chip">${escapeHtml(e.issueType)}</span>` : '',
-        e.statusName ? `<span class="chip">${escapeHtml(e.statusName)}</span>` : '',
+      const tooltip = [
+        e.issueType,
+        e.statusName,
+        allMode && e.instanceName ? e.instanceName : '',
       ]
         .filter(Boolean)
-        .join('');
+        .join(' · ');
       const comment = e.comment
-        ? `<div class="entry-comment">${escapeHtml(e.comment)}</div>`
-        : '';
+        ? `<span class="entry-comment" title="${escapeHtml(e.comment)}">${escapeHtml(e.comment)}</span>`
+        : '<span></span>';
       const money = showMoney
-        ? `<span class="entry-money">${fmtMoney(
+        ? ` <span class="entry-money">${fmtMoney(
             moneyForSeconds(e.timeSpentSeconds, e.projectKey)
           )}</span>`
         : '';
+      const inst = allMode
+        ? ` <span class="tg-inst">${escapeHtml(slugOf(e.instanceId))}</span>`
+        : '';
       return `
-        <li class="entry" style="border-left-color:${color}">
+        <li class="entry">
           <div class="entry-top">
-            <a class="entry-key" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(
+            <span><a class="entry-key" style="color:${color}" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(
         e.issueKey
-      )}</a>
-            <span class="entry-amounts">
-              <span class="entry-time">${escapeHtml(e.timeSpent || fmtTime(e.timeSpentSeconds))}</span>
-              ${money}
-            </span>
+      )}</a>${inst}</span>
+            <span class="entry-amounts">${escapeHtml(
+              e.timeSpent || fmtTime(e.timeSpentSeconds)
+            )}${money}</span>
           </div>
-          <p class="entry-summary">${escapeHtml(e.issueSummary)}</p>
-          <div class="entry-timerange">${fmtTimeRange(e.started, e.timeSpentSeconds, e.tz)}</div>
-          <div class="entry-meta">${meta}</div>
-          ${comment}
-          <a class="entry-open" href="${e.link}" target="_blank" rel="noopener">Open worklog in Jira ↗</a>
+          <p class="entry-summary" title="${escapeHtml(tooltip)}">${escapeHtml(e.issueSummary)}</p>
+          <div class="entry-bottom">
+            <span class="entry-timerange">${fmtTimeRange(e.started, e.timeSpentSeconds, e.tz)}</span>
+            ${comment}
+          </div>
+          <div class="entry-links">
+            <a href="${e.link}" target="_blank" rel="noopener">worklog in Jira ↗</a>
+          </div>
         </li>`;
     })
     .join('');
@@ -845,12 +984,16 @@ function buildPivot(data, dates) {
   );
 }
 
+// Duration without the inner space ("1h30m") for compact day cells.
+function fmtTimeTight(seconds) {
+  return fmtTime(seconds).replace(/ /g, '');
+}
+
 function renderTable() {
-  const table = $('worklogTable');
+  const wrap = $('tableView');
   const data = state.data;
   if (!data) {
-    table.innerHTML = '';
-    $('tableHint').textContent = '';
+    wrap.innerHTML = '';
     return;
   }
 
@@ -858,6 +1001,8 @@ function renderTable() {
   const tasks = buildPivot(data, dates);
   const todayStr = todayYmd();
   const showMoney = hasRates();
+  const allMode = state.activeInstanceId === 'all';
+  const grid = `grid-template-columns:340px repeat(${dates.length}, 42px) 150px`;
 
   const colTotals = {};
   const colMoney = {};
@@ -875,109 +1020,94 @@ function renderTable() {
     return wd === 0 || wd === 6;
   };
 
-  // Header
-  let html = '<thead><tr><th class="col-task">Task</th>';
+  // Header row (sticky top)
+  let html = `<div class="tg-row tg-head" style="${grid}"><div class="tg-corner">task</div>`;
   for (const d of dates) {
     const dd = parseYmd(d);
-    const cls = `col-day ${isWeekend(d) ? 'weekend' : ''} ${d === todayStr ? 'today' : ''}`;
-    html += `<th class="${cls}">${dd.getDate()}<small>${dd.toLocaleDateString(undefined, {
-      weekday: 'short',
-    })}</small></th>`;
+    const cls = `tg-dayhead${isWeekend(d) ? ' weekend' : ''}${d === todayStr ? ' today' : ''}`;
+    const dow = dd.toLocaleDateString(undefined, { weekday: 'short' }).toLowerCase();
+    html += `<div class="${cls}"><div class="num">${dd.getDate()}</div><div class="dow">${escapeHtml(
+      dow
+    )}</div></div>`;
   }
-  html += '<th class="col-total">Total</th></tr></thead>';
+  html += `<div class="tg-totalhead">total</div></div>`;
 
-  // Body
-  html += '<tbody>';
+  // Task rows
   if (!tasks.length) {
-    html += `<tr><td class="col-task">No worklogs in this range.</td>${dates
-      .map(() => '<td class="cell cell-empty">·</td>')
-      .join('')}<td class="col-total">0h</td></tr>`;
-  } else {
-    const allMode = state.activeInstanceId === 'all';
-    for (const t of tasks) {
-      const issueUrl = `${t.base}/browse/${t.key}`;
-      const instLine = allMode && t.instanceName
-        ? `<span class="task-instance">${escapeHtml(t.instanceName)}</span>`
-        : '';
-      html += `<tr><td class="col-task" style="border-left-color:${t.color}"><span class="task-head"><span class="swatch" style="background:${t.color}"></span><a class="task-key" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(
-        t.key
-      )}</a></span><span class="task-summary" title="${escapeHtml(t.summary)}">${escapeHtml(
-        t.summary
-      )}</span>${instLine}</td>`;
-      const cellData = `data-instance="${escapeHtml(t.instanceId)}" data-issue="${escapeHtml(
-        t.key
-      )}"`;
-      for (const d of dates) {
-        const c = t.perDate[d];
-        const wcls = isWeekend(d) ? 'weekend' : '';
-        if (c) {
-          const n = c.entries.length;
-          html += `<td class="cell cell-clickable ${wcls}" ${cellData} data-date="${d}" title="${n} worklog${
-            n === 1 ? '' : 's'
-          } — click to view or add"><span class="cell-link">${fmtTime(c.seconds)}</span></td>`;
-        } else {
-          html += `<td class="cell cell-empty cell-clickable ${wcls}" ${cellData} data-date="${d}" title="Click to log work on this day">·</td>`;
-        }
-      }
-      const tMoney = showMoney
-        ? `<small class="cell-money">${fmtMoney(moneyForSeconds(t.total, t.projectKey))}</small>`
-        : '';
-      html += `<td class="col-total">${fmtTime(t.total)}${tMoney}</td></tr>`;
-    }
+    html += `<div class="tg-emptyrow">// no worklogs in this range</div>`;
   }
-  html += '</tbody>';
+  for (const t of tasks) {
+    const issueUrl = `${t.base}/browse/${t.key}`;
+    const inst = allMode
+      ? `<span class="tg-inst">${escapeHtml(slugOf(t.instanceId))}</span>`
+      : '';
+    html += `<div class="tg-row tg-task" style="${grid}">`;
+    html +=
+      `<div class="tg-taskcell">` +
+      `<span class="tg-taskbar" style="background:${t.color}"></span>` +
+      `<a class="tg-key" style="color:${t.color}" href="${issueUrl}" target="_blank" rel="noopener">${escapeHtml(
+        t.key
+      )}</a>${inst}` +
+      `<span class="tg-summary" title="${escapeHtml(t.summary)}">${escapeHtml(t.summary)}</span>` +
+      `</div>`;
+    const cellData = `data-instance="${escapeHtml(t.instanceId)}" data-issue="${escapeHtml(
+      t.key
+    )}"`;
+    for (const d of dates) {
+      const c = t.perDate[d];
+      const wcls = isWeekend(d) ? ' weekend' : '';
+      if (c) {
+        const n = c.entries.length;
+        html += `<div class="tg-cell${wcls}" ${cellData} data-date="${d}" title="${n} worklog${
+          n === 1 ? '' : 's'
+        } — click to view, edit or add">${fmtTimeTight(c.seconds)}</div>`;
+      } else {
+        html += `<div class="tg-cell empty${wcls}" ${cellData} data-date="${d}" title="Click to prefill the quick-log bar"></div>`;
+      }
+    }
+    const tMoney = showMoney
+      ? `<span class="money">${fmtMoney(moneyForSeconds(t.total, t.projectKey))}</span>`
+      : '';
+    html += `<div class="tg-totalcell"><span class="dur">${fmtTime(t.total)}</span>${tMoney}</div></div>`;
+  }
 
-  // Totals row
+  // Totals row (sticky bottom)
   const grand = tasks.reduce((s, t) => s + t.total, 0);
   const grandMoney = tasks.reduce((s, t) => s + moneyForSeconds(t.total, t.projectKey), 0);
-  html += '<tbody><tr class="total-row"><td class="col-task">Total</td>';
+  html += `<div class="tg-row tg-foot" style="${grid}"><div class="tg-corner foot">Σ total</div>`;
   for (const d of dates) {
     const v = colTotals[d];
-    const dMoney = showMoney && v ? `<small class="cell-money">${fmtMoney(colMoney[d])}</small>` : '';
-    html += `<td class="${isWeekend(d) ? 'weekend' : ''}">${v ? fmtTime(v) : '·'}${dMoney}</td>`;
+    const money = showMoney && v ? fmtMoneyShort(colMoney[d]) : '';
+    html += `<div class="tg-daytotal"><div class="dur">${
+      v ? fmtTimeTight(v) : '·'
+    }</div><div class="money">${escapeHtml(money)}</div></div>`;
   }
   const grandMoneyHtml = showMoney
-    ? `<small class="cell-money">${fmtMoney(grandMoney)}</small>`
+    ? `<span class="money">${fmtMoney(grandMoney)}</span>`
     : '';
-  html += `<td class="col-total grand">${fmtTime(grand)}${grandMoneyHtml}</td></tr></tbody>`;
+  html += `<div class="tg-totalcell"><span class="dur">${fmtTime(grand)}</span>${grandMoneyHtml}</div></div>`;
 
-  table.innerHTML = html;
-  $('tableHint').textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${
-    dates.length
-  } day${dates.length === 1 ? '' : 's'} · click a cell to view or add worklogs`;
+  wrap.innerHTML = html;
 }
 
 /* ================================================================== */
 /* Instances                                                          */
 /* ================================================================== */
 
-function populateInstanceSelect() {
-  const sel = $('instanceSelect');
-  if (!state.instances.length) {
-    sel.innerHTML = '<option>No instances</option>';
-    sel.disabled = true;
-    return;
-  }
-  sel.disabled = false;
-  const allOpt =
-    state.instances.length > 1
-      ? `<option value="all" ${state.activeInstanceId === 'all' ? 'selected' : ''}>★ All instances</option>`
-      : '';
-  sel.innerHTML =
-    allOpt +
-    state.instances
-      .map(
-        (i) =>
-          `<option value="${i.id}" ${
-            i.id === state.activeInstanceId ? 'selected' : ''
-          }>${escapeHtml(i.name)}</option>`
-      )
-      .join('');
+// Refresh the quick-log syntax hint with the current instance slugs.
+function updateQlHint() {
+  const slugs = allSlugs();
+  const instPart = slugs.length > 1 ? ` · instances: ${slugs.map((s) => s + ':').join(' ')}` : '';
+  $('qlHint').innerHTML =
+    `syntax: <span>${slugs.length > 1 ? '[inst:]' : ''}TASK-123</span> <span>2h 30m</span> ` +
+    `<span>@07-15</span> <span>free-text note</span>${escapeHtml(instPart)} · click an empty table cell to prefill`;
 }
 
 async function refreshInstances(makeActiveId) {
   const data = await api('/api/instances');
   state.instances = data.instances;
+  rebuildSlugs();
+  updateQlHint();
   let active =
     makeActiveId ||
     (data.instances.some((i) => i.id === state.activeInstanceId) && state.activeInstanceId) ||
@@ -997,12 +1127,13 @@ async function refreshInstances(makeActiveId) {
     }
   }
   state.activeInstanceId = active;
-  populateInstanceSelect();
+  renderSidebarInstances();
 }
 
 async function switchInstance(id) {
   state.activeInstanceId = id;
   state.selectedDate = null;
+  renderSidebarInstances(); // immediate visual feedback while loading
   try {
     localStorage.setItem('jwd_selection', id);
   } catch {
@@ -1046,20 +1177,20 @@ function renderInstanceList() {
           : i.authMethod === 'basic'
           ? 'Basic auth'
           : 'Access token';
-      const gw = i.gatewayEnabled ? '<span class="badge proxy">Proxy</span>' : '';
+      const gw = i.gatewayEnabled ? '<span class="badge proxy">+Proxy</span>' : '';
       return `
         <li class="instance-row" data-id="${i.id}">
           <span class="badge ${i.type}">${i.type === 'cloud' ? 'Cloud' : 'Server'}</span>
           ${gw}
           <div class="meta">
             <div class="name">${escapeHtml(i.name)}</div>
-            <div class="sub">${escapeHtml(i.baseUrl)} · ${method}${
+            <div class="sub">${escapeHtml(slugOf(i.id))}: · ${escapeHtml(i.baseUrl)} · ${method}${
         i.timeZone ? ' · ' + escapeHtml(tzLabel(i.timeZone)) : ''
       }</div>
           </div>
           <div class="row-actions">
-            <button class="pill ghost" data-act="edit" data-id="${i.id}">Edit</button>
-            <button class="pill danger" data-act="del" data-id="${i.id}">Delete</button>
+            <button class="btn-edit" data-act="edit" data-id="${i.id}">Edit</button>
+            <button class="btn-danger" data-act="del" data-id="${i.id}">Delete</button>
           </div>
         </li>`;
     })
@@ -1274,6 +1405,7 @@ async function saveForm() {
     });
     await refreshInstances(res.instance.id);
     closeSettings();
+    showToast(id ? `instance updated: ${payload.name}` : `instance connected: ${payload.name}`);
     await loadData();
   } catch (err) {
     $('modalError').textContent = err.message || 'Could not save instance.';
@@ -1293,7 +1425,9 @@ async function deleteInstance(id) {
     const wasActive = state.activeInstanceId === id;
     await refreshInstances();
     renderInstanceList();
+    showToast(`disconnected ${inst.name}`);
     if (wasActive) await loadData();
+    else render();
   } catch (err) {
     setStatus(err.message || 'Could not delete instance.', true);
   } finally {
@@ -1378,6 +1512,7 @@ async function saveRates() {
     });
     state.rates = res.rates;
     closeRates();
+    showToast('rates saved — totals recalculated');
     render();
   } catch (err) {
     $('ratesError').textContent = err.message || 'Could not save rates.';
@@ -1437,6 +1572,7 @@ async function saveGoal(amount) {
     });
     state.goal = res.goal;
     closeGoal();
+    showToast(state.goal.amount > 0 ? `goal set: ${fmtMoney(state.goal.amount)}` : 'goal cleared');
     render();
   } catch (err) {
     $('goalError').textContent = err.message || 'Could not save the goal.';
@@ -1549,8 +1685,8 @@ function renderWorklogModalBody() {
             <textarea id="wledit_comment" rows="2">${escapeHtml(e.comment || '')}</textarea>
           </label>
           <div class="wl-item-actions">
-            <button class="pill ghost" data-act="cancel">Cancel</button>
-            <button class="pill primary" data-act="save" data-id="${wid}">Save changes</button>
+            <button class="btn-ghost" data-act="cancel">Cancel</button>
+            <button class="btn-primary" data-act="save" data-id="${wid}">Save changes</button>
           </div>
         </li>`;
       }
@@ -1632,6 +1768,7 @@ async function submitWorklog() {
     $('wl_comment').value = '';
     $('wlOk').textContent = `Logged ${timeSpent} on ${m.issueKey}.`;
     $('wlOk').hidden = false;
+    showToast(`logged ${timeSpent} on ${m.issueKey}`);
     await loadData(); // refresh table + totals
     if (state.worklogModal) renderWorklogModalBody(); // still open → refresh its list
   } catch (err) {
@@ -1670,6 +1807,7 @@ async function saveWorklogEdit(worklogId) {
     m.editId = null;
     $('wlOk').textContent = 'Worklog updated.';
     $('wlOk').hidden = false;
+    showToast('worklog updated');
     await loadData();
     if (state.worklogModal) renderWorklogModalBody();
   } catch (err) {
@@ -1694,6 +1832,7 @@ async function deleteWorklogEntry(worklogId) {
     });
     $('wlOk').textContent = 'Worklog deleted.';
     $('wlOk').hidden = false;
+    showToast('worklog deleted');
     await loadData();
     if (state.worklogModal) renderWorklogModalBody();
   } catch (err) {
@@ -1742,6 +1881,7 @@ function openNewWorklog() {
   $('nw_key').value = '';
   $('nw_time').value = '';
   $('nw_comment').value = '';
+  $('nw_durPreview').textContent = '';
   setStartedControls('nw_date', 'nw_time_of_day', defaultStartFor(todayYmd()));
   $('nw_error').hidden = true;
   $('newWorklogModal').hidden = false;
@@ -1820,12 +1960,212 @@ async function submitNewWorklog() {
     $('nw_comment').value = '';
     $('nw_ok').textContent = `Logged ${timeSpent} on ${nw.issueKey}.`;
     $('nw_ok').hidden = false;
+    showToast(`logged ${timeSpent} on ${nw.issueKey}`);
     await loadData(); // reflect it in the current view if applicable
   } catch (err) {
     showNwError(err.message || 'Could not log work.');
   } finally {
     showLoading(false);
     $('nw_logBtn').disabled = false;
+  }
+}
+
+// Seconds in a Jira-style duration string ("1h 30m", "2h", "45m", "1d").
+// Display-only estimate: d = 8h, w = 5d.
+function parseJiraDuration(s) {
+  const str = String(s || '').trim();
+  if (!str) return 0;
+  let sec = 0;
+  let ok = false;
+  const re = /(\d+(?:\.\d+)?)\s*([wdhm])/gi;
+  let m;
+  while ((m = re.exec(str))) {
+    ok = true;
+    const n = parseFloat(m[1]);
+    const unit = m[2].toLowerCase();
+    sec += n * (unit === 'w' ? 5 * 8 * 3600 : unit === 'd' ? 8 * 3600 : unit === 'h' ? 3600 : 60);
+  }
+  return ok ? Math.round(sec) : 0;
+}
+
+// Live "= 1h 30m · $40.50" preview under the full-log duration field.
+function updateNwDurPreview() {
+  const el = $('nw_durPreview');
+  const sec = parseJiraDuration($('nw_time').value);
+  if (!sec) {
+    el.textContent = '';
+    return;
+  }
+  const proj = state.newWorklog ? (state.newWorklog.issueKey.split('-')[0] || '') : '';
+  const money = hasRates() && proj ? ` · ${fmtMoney(moneyForSeconds(sec, proj))}` : '';
+  el.textContent = `= ${fmtTime(sec)}${money}`;
+}
+
+/* ================================================================== */
+/* Quick-log command bar                                              */
+/* ================================================================== */
+
+// Grammar: [inst:]TASK-123  2h 30m 1h30m (summed)  @MM-DD | @YYYY-MM-DD  note…
+function parseQuickLog(text) {
+  const out = { key: null, slug: null, minutes: 0, date: todayYmd(), note: [] };
+  const toks = String(text || '').trim().split(/\s+/).filter(Boolean);
+  for (const tok of toks) {
+    if (!out.key) {
+      const m = tok.match(/^(?:([a-z0-9][a-z0-9._-]*):)?([a-z][a-z0-9]*-\d+)$/i);
+      if (m) {
+        out.slug = m[1] ? m[1].toLowerCase() : null;
+        out.key = m[2].toUpperCase();
+        continue;
+      }
+    }
+    const dm = tok.match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?$/i);
+    if (dm && (dm[1] || dm[2])) {
+      out.minutes += Math.round(parseFloat(dm[1] || 0) * 60) + Math.round(parseFloat(dm[2] || 0));
+      continue;
+    }
+    const dd = tok.match(/^@(?:(\d{4})-)?(\d{1,2})-(\d{1,2})$/);
+    if (dd) {
+      const year = dd[1] || String(new Date().getFullYear());
+      out.date = `${year}-${dd[2].padStart(2, '0')}-${dd[3].padStart(2, '0')}`;
+      continue;
+    }
+    out.note.push(tok);
+  }
+  out.note = out.note.join(' ');
+  return out;
+}
+
+// Which instance should this quick-log go to? Explicit slug wins; then the
+// current filter; then whatever the loaded worklogs say about the task or its
+// project. Ambiguity is an error — never guess between instances.
+function resolveQlInstance(p) {
+  if (p.slug) {
+    const id = instanceBySlug(p.slug);
+    if (!id) return { error: `unknown instance "${p.slug}:" — use ${allSlugs().map((s) => s + ':').join(' or ')}` };
+    return { id };
+  }
+  if (state.activeInstanceId && state.activeInstanceId !== 'all') {
+    return { id: state.activeInstanceId };
+  }
+  if (state.data && p.key) {
+    const proj = p.key.split('-')[0];
+    const byTask = new Set();
+    const byProj = new Set();
+    for (const day of Object.values(state.data.days)) {
+      for (const e of day.entries) {
+        if (e.issueKey === p.key) byTask.add(e.instanceId);
+        if (e.projectKey === proj) byProj.add(e.instanceId);
+      }
+    }
+    const pool = byTask.size ? byTask : byProj;
+    if (pool.size === 1) return { id: [...pool][0] };
+  }
+  if (state.instances.length === 1) return { id: state.instances[0].id };
+  const example = state.instances[0] ? `${slugOf(state.instances[0].id)}:${p.key || 'TASK-1'}` : '';
+  return { error: `which instance? prefix the key, e.g. ${example}` };
+}
+
+function minutesToJira(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return [h ? `${h}h` : null, m ? `${m}m` : null].filter(Boolean).join(' ') || '0m';
+}
+
+function updateQlPreview() {
+  const el = $('qlPreview');
+  const text = $('qlInput').value;
+  el.className = 'ql-preview';
+  if (!text.trim()) {
+    el.textContent = '';
+    return;
+  }
+  const p = parseQuickLog(text);
+  if (!p.key) {
+    el.textContent = 'start with a task key…';
+    return;
+  }
+  const inst = resolveQlInstance(p);
+  if (inst.error) {
+    el.classList.add('bad');
+    el.textContent = inst.error;
+    return;
+  }
+  const slug = slugOf(inst.id);
+  if (!p.minutes) {
+    el.classList.add('hint');
+    el.textContent = `${slug}:${p.key} · add duration…`;
+    return;
+  }
+  el.classList.add('ok');
+  const projectKey = p.key.split('-')[0];
+  const money = hasRates() ? ` · ${fmtMoney((p.minutes / 60) * rateFor(projectKey))}` : '';
+  el.textContent = `${slug}:${p.key} · ${fmtTime(p.minutes * 60)} · ${p.date.slice(5)}${money}`;
+}
+
+// Put "slug:KEY @MM-DD " into the bar and focus it (table cells, day detail).
+function prefillQuickLog(key, date, instanceId) {
+  const parts = [];
+  if (key) {
+    const prefix =
+      state.activeInstanceId === 'all' && instanceId ? `${slugOf(instanceId)}:` : '';
+    parts.push(prefix + key);
+  }
+  if (date) {
+    const md = date.slice(0, 4) === String(new Date().getFullYear()) ? date.slice(5) : date;
+    parts.push('@' + md);
+  }
+  const input = $('qlInput');
+  input.value = parts.join(' ') + ' ';
+  input.focus();
+  updateQlPreview();
+}
+
+async function submitQuickLog() {
+  const text = $('qlInput').value;
+  if (!text.trim()) return;
+  const p = parseQuickLog(text);
+  if (!p.key) return showToast('start with a task key like DPPDA-1794', true);
+  if (!p.minutes) return showToast('add a duration: 2h, 30m, 1h30m', true);
+  const inst = resolveQlInstance(p);
+  if (inst.error) return showToast(inst.error, true);
+  const instName = (state.instances.find((i) => i.id === inst.id) || {}).name || 'this instance';
+
+  showLoading(true);
+  $('qlBtn').disabled = true;
+  try {
+    // Verify the ticket exists on that instance before logging anything.
+    let issue;
+    try {
+      issue = await api(
+        `/api/issue?instance=${encodeURIComponent(inst.id)}&key=${encodeURIComponent(p.key)}`
+      );
+    } catch {
+      const el = $('qlPreview');
+      el.className = 'ql-preview bad';
+      el.textContent = `✕ ${p.key} not found in ${instName}`;
+      showToast(`${p.key} not found in ${instName}`, true);
+      return;
+    }
+    await api('/api/worklog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: inst.id,
+        issueKey: issue.key,
+        started: defaultStartFor(p.date),
+        timeSpent: minutesToJira(p.minutes),
+        comment: p.note,
+      }),
+    });
+    $('qlInput').value = '';
+    updateQlPreview();
+    showToast(`logged ${fmtTime(p.minutes * 60)} on ${issue.key} @ ${p.date.slice(5)} (${slugOf(inst.id)})`);
+    await loadData();
+  } catch (err) {
+    showToast(err.message || 'Could not log work.', true);
+  } finally {
+    showLoading(false);
+    $('qlBtn').disabled = false;
   }
 }
 
@@ -1855,16 +2195,48 @@ function wireEvents() {
     render();
   });
 
-  // Instance switching + refresh
-  $('instanceSelect').addEventListener('change', (e) => switchInstance(e.target.value));
+  // Instance switching (sidebar) + refresh
+  $('instanceTabs').addEventListener('click', (e) => {
+    const row = e.target.closest('.inst-row[data-id]');
+    if (!row || row.dataset.id === state.activeInstanceId) return;
+    switchInstance(row.dataset.id);
+  });
   $('refreshBtn').addEventListener('click', loadData);
 
-  // Table cell → worklog view/add modal
-  $('worklogTable').addEventListener('click', (e) => {
-    const td = e.target.closest('td[data-issue]');
-    if (!td) return;
-    openWorklogModal(td.dataset.instance, td.dataset.issue, td.dataset.date);
+  // Table cells: filled → view/edit modal, empty → prefill the quick-log bar
+  $('tableView').addEventListener('click', (e) => {
+    const cell = e.target.closest('.tg-cell[data-issue]');
+    if (!cell) return;
+    if (cell.classList.contains('empty')) {
+      prefillQuickLog(cell.dataset.issue, cell.dataset.date, cell.dataset.instance);
+    } else {
+      openWorklogModal(cell.dataset.instance, cell.dataset.issue, cell.dataset.date);
+    }
   });
+
+  // Quick-log command bar
+  $('qlInput').addEventListener('input', updateQlPreview);
+  $('qlInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitQuickLog();
+    }
+  });
+  $('qlBtn').addEventListener('click', submitQuickLog);
+
+  // Day detail: "log work on this day" prefills the quick-log bar
+  $('logDayBtn').addEventListener('click', () => {
+    if (state.selectedDate) prefillQuickLog('', state.selectedDate, null);
+  });
+
+  // Stats bar: goal items open the goal modal
+  $('statsBar').addEventListener('click', (e) => {
+    const item = e.target.closest('.stat-item[data-click="goal"]');
+    if (item) openGoal();
+  });
+
+  // Full-log modal: live "= 1h 30m · $40.50" preview
+  $('nw_time').addEventListener('input', updateNwDurPreview);
   $('closeWorklog').addEventListener('click', closeWorklog);
   $('cancelWorklog').addEventListener('click', closeWorklog);
   $('logWorkBtn').addEventListener('click', submitWorklog);
@@ -1896,9 +2268,9 @@ function wireEvents() {
     }
   });
 
-  // Legend: click a project to show/hide it
-  $('legend').addEventListener('click', (e) => {
-    const item = e.target.closest('.legend-item');
+  // Sidebar projects: click a project to show/hide it
+  $('projectChips').addEventListener('click', (e) => {
+    const item = e.target.closest('.chip-row');
     if (!item) return;
     const key = item.dataset.project;
     if (state.hiddenProjects.has(key)) state.hiddenProjects.delete(key);
@@ -2008,6 +2380,9 @@ function wireEvents() {
       if (e.key === 'Escape') closeNewWorklog();
       return;
     }
+    // Don't hijack arrows while typing (quick-log bar, selects, …).
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     if (e.key === 'ArrowLeft') shiftRange(-1);
     if (e.key === 'ArrowRight') shiftRange(1);
   });
@@ -2043,10 +2418,10 @@ async function init() {
     }
     if (saved === 'all' && state.instances.length > 1) {
       state.activeInstanceId = 'all';
-      populateInstanceSelect();
+      renderSidebarInstances();
     } else if (saved && state.instances.some((i) => i.id === saved)) {
       state.activeInstanceId = saved;
-      populateInstanceSelect();
+      renderSidebarInstances();
     }
     await loadData();
   } catch (err) {

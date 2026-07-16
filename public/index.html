@@ -3,38 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Jira Worklog Dashboard</title>
+    <title>worklog.console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="styles.css" />
     <link
       rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕒</text></svg>"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2338bdf8'/><text x='50' y='68' font-size='52' text-anchor='middle' font-family='monospace' fill='%2306131c' font-weight='bold'>&gt;_</text></svg>"
     />
   </head>
   <body>
-    <header class="topbar">
+    <!-- ================= SIDEBAR ================= -->
+    <aside class="sidebar">
       <div class="brand">
-        <span class="logo">🕒</span>
-        <span>Worklog Dashboard</span>
+        <div class="brand-mark">&gt;_</div>
+        <div>
+          <div class="brand-title">worklog<span>.console</span></div>
+          <div class="brand-range" id="brandRange"></div>
+        </div>
       </div>
 
-      <div class="instance-area">
-        <select id="instanceSelect" class="select" title="Jira instance"></select>
+      <div class="side-section">
+        <div class="side-label">View</div>
+        <div class="side-nav">
+          <button id="tableBtn" class="side-btn"><span class="side-glyph">▦</span> Table</button>
+          <button id="calBtn" class="side-btn"><span class="side-glyph">▩</span> Calendar</button>
+        </div>
       </div>
 
-      <div class="right">
-        <span id="userBadge" class="user-badge"></span>
-        <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
-        <button id="newWorklogBtn" class="pill primary" title="Log work on any ticket">➕ Log work</button>
-        <button id="ratesBtn" class="pill" title="Hourly rates">💲 Rates</button>
-        <button id="goalBtn" class="pill" title="Earnings goal for the visible range">🎯 Goal</button>
-        <button id="settingsBtn" class="pill">⚙ Instances</button>
+      <div class="side-section">
+        <div class="side-label-row">
+          <div class="side-label">Instances</div>
+          <button id="settingsBtn" class="side-link">manage</button>
+        </div>
+        <div class="side-nav" id="instanceTabs"></div>
       </div>
-    </header>
 
-    <div class="toolbar">
-      <div class="range-controls">
-        <button id="prevBtn" class="icon-btn" title="Previous period">‹</button>
-        <button id="nextBtn" class="icon-btn" title="Next period">›</button>
+      <div class="side-section" id="projectsSection" hidden>
+        <div class="side-label">Projects</div>
+        <div class="project-chips" id="projectChips"></div>
+      </div>
+
+      <div class="side-spacer"></div>
+
+      <div class="side-footer">
+        <button id="ratesBtn" class="side-footbtn">
+          <span>Hourly rates</span><span class="rate-label" id="rateLabel"></span>
+        </button>
+        <button id="goalBtn" class="side-footbtn">
+          <span>Earnings goal</span><span class="goal-label" id="goalSideLabel"></span>
+        </button>
+        <div class="side-user">
+          <div class="side-avatar" id="userAvatar"></div>
+          <div class="side-username" id="userName"></div>
+          <button id="refreshBtn" class="side-refresh" title="Reload from Jira">↻</button>
+        </div>
+        <div class="status-msg" id="statusMsg"></div>
+      </div>
+    </aside>
+
+    <!-- ================= MAIN ================= -->
+    <main>
+      <!-- Quick-log command bar -->
+      <div class="ql-bar">
+        <span class="ql-prompt">&gt;</span>
+        <input
+          id="qlInput"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Log work fast:  DPPDA-1794 2h @07-15 fixed the staging API"
+        />
+        <div class="ql-preview" id="qlPreview"></div>
+        <button id="qlBtn" class="ql-submit">Log ⏎</button>
+      </div>
+      <div class="ql-hint" id="qlHint">
+        syntax: <span>[instance:]TASK-123</span> <span>2h 30m</span> <span>@07-15</span>
+        <span>free-text note</span> · or click an empty table cell to prefill
+      </div>
+
+      <!-- Range controls -->
+      <div class="range-row">
+        <button id="prevBtn" class="icon-btn" title="Previous range">‹</button>
+        <button id="nextBtn" class="icon-btn" title="Next range">›</button>
         <select id="presetSelect" class="select">
           <option value="thisMonth">This month</option>
           <option value="lastMonth">Last month</option>
@@ -42,80 +97,39 @@
           <option value="last7">Last 7 days</option>
           <option value="last14">Last 14 days</option>
           <option value="last30">Last 30 days</option>
-          <option value="custom">Custom…</option>
+          <option value="custom">Custom range</option>
         </select>
-        <span class="date-field">From <button type="button" id="fromDate"></button></span>
-        <span class="date-field">To <button type="button" id="toDate"></button></span>
-        <span id="rangeLabel" class="range-label"></span>
+        <button type="button" id="fromDate" class="date-btn"></button>
+        <span class="range-arrow">→</span>
+        <button type="button" id="toDate" class="date-btn"></button>
+        <span class="range-label" id="rangeLabel"></span>
+        <div class="range-spacer"></div>
+        <button id="newWorklogBtn" class="btn-outline">+ Log new worklog</button>
       </div>
 
-      <div class="view-toggle" role="group" aria-label="View">
-        <button id="calBtn" class="seg active">▦ Calendar</button>
-        <button id="tableBtn" class="seg">▤ Table</button>
-      </div>
-    </div>
-
-    <main>
-      <section class="summary" id="summary">
-        <div class="summary-item">
-          <span class="summary-value" id="rangeTotal">—</span>
-          <span class="summary-label">logged in range</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-value" id="daysLogged">—</span>
-          <span class="summary-label">days with worklogs</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-value" id="avgPerDay">—</span>
-          <span class="summary-label">avg / logged day</span>
-        </div>
-        <div class="summary-item" id="moneyItem" hidden>
-          <span class="summary-value money" id="rangeMoney">—</span>
-          <span class="summary-label">earned in range</span>
-        </div>
-        <div class="summary-item goal-item" id="goalLeftItem" hidden>
-          <span class="summary-value money goal-left" id="goalLeft">—</span>
-          <span class="summary-label">left / goal in range</span>
-        </div>
-        <div class="summary-item goal-item" id="goalDaysItem" hidden>
-          <span class="summary-value" id="goalDays">—</span>
-          <span class="summary-label">work days left in range</span>
-        </div>
-        <div class="summary-item goal-item" id="goalPaceItem" hidden>
-          <span class="summary-value" id="goalPace">—</span>
-          <span class="summary-label" id="goalPaceLabel">needed / work day</span>
-        </div>
-        <div class="summary-spacer"></div>
-        <div id="statusMsg" class="status-msg"></div>
-      </section>
-
-      <div class="legend" id="legend" hidden></div>
-
-      <!-- Calendar view -->
-      <div class="layout" id="calendarView">
-        <section class="calendar-wrap">
-          <div class="weekday-row" id="weekdayRow"></div>
-          <div class="calendar" id="calendar"></div>
-        </section>
-
-        <aside class="detail" id="detail">
-          <div class="detail-empty" id="detailEmpty">Select a day to see its worklogs.</div>
-          <div class="detail-body" id="detailBody" hidden>
-            <div class="detail-header">
-              <h2 id="detailDate">—</h2>
-              <span class="detail-total" id="detailTotal"></span>
-            </div>
-            <ul class="entries" id="entries"></ul>
-          </div>
-        </aside>
-      </div>
+      <!-- Stats bar -->
+      <div class="stats-bar" id="statsBar"></div>
 
       <!-- Table view -->
-      <div class="table-view" id="tableView" hidden>
-        <div class="table-wrap">
-          <table class="worklog-table" id="worklogTable"></table>
+      <div class="table-view" id="tableView" hidden></div>
+
+      <!-- Calendar view -->
+      <div class="cal-view" id="calendarView" hidden>
+        <div class="cal-pane">
+          <div class="cal-weekdays" id="weekdayRow"></div>
+          <div class="cal-grid" id="calendar"></div>
         </div>
-        <p class="table-hint" id="tableHint"></p>
+        <aside class="detail" id="detail">
+          <div class="detail-empty" id="detailEmpty">// select a day to inspect worklogs</div>
+          <div class="detail-body" id="detailBody" hidden>
+            <div class="detail-header">
+              <div class="detail-date" id="detailDate">—</div>
+              <div class="detail-total" id="detailTotal"></div>
+            </div>
+            <ul class="entries" id="entries"></ul>
+            <button class="log-day-btn" id="logDayBtn">&gt; log work on this day</button>
+          </div>
+        </aside>
       </div>
     </main>
 
@@ -124,13 +138,13 @@
       <div class="modal wide">
         <div class="modal-head">
           <h2 id="modalTitle">Jira instances</h2>
-          <button id="closeSettings" class="icon-btn ghost" title="Close">✕</button>
+          <button id="closeSettings" class="modal-x" title="Close">✕</button>
         </div>
 
         <!-- List of instances -->
         <div id="listView">
           <ul class="instance-list" id="instanceList"></ul>
-          <button id="addInstanceBtn" class="pill primary">+ Add instance</button>
+          <button id="addInstanceBtn" class="btn-primary">+ Add instance</button>
         </div>
 
         <!-- Add / edit form -->
@@ -245,9 +259,9 @@
           <div class="diag" id="diagResult" hidden></div>
           <div class="modal-error" id="modalError" hidden></div>
           <div class="modal-actions">
-            <button id="cancelForm" class="pill ghost">Cancel</button>
-            <button id="testForm" class="pill">Test connection</button>
-            <button id="saveForm" class="pill primary">Save &amp; connect</button>
+            <button id="cancelForm" class="btn-ghost">Cancel</button>
+            <button id="testForm" class="btn-ghost">Test connection</button>
+            <button id="saveForm" class="btn-primary">Save &amp; connect</button>
           </div>
         </div>
       </div>
@@ -258,21 +272,20 @@
       <div class="modal">
         <div class="modal-head">
           <h2>Hourly rates</h2>
-          <button id="closeRates" class="icon-btn ghost" title="Close">✕</button>
+          <button id="closeRates" class="modal-x" title="Close">✕</button>
         </div>
 
-        <p class="opt rates-intro">
-          Set a global hourly rate, then override it for individual projects. Money is
-          calculated from your logged time — nothing is sent to Jira.
+        <p class="modal-intro">
+          Global rate with per-project overrides. Money is computed locally — nothing is sent to Jira.
         </p>
 
         <div class="rates-grid">
           <label class="field">
-            Default rate <span class="opt">/ hour</span>
+            <span class="mono-label">default / hour</span>
             <input type="number" id="r_default" min="0" step="0.01" placeholder="0" />
           </label>
           <label class="field">
-            Currency
+            <span class="mono-label">currency</span>
             <select id="r_currency" class="select">
               <option value="USD">USD — US Dollar ($)</option>
               <option value="EUR">EUR — Euro (€)</option>
@@ -294,15 +307,15 @@
         </div>
 
         <div class="field">
-          <span class="field-label">Per-project overrides</span>
+          <span class="mono-label">per-project overrides</span>
           <p class="opt">Leave a project blank to use the default rate. Applies across all instances.</p>
           <ul class="rate-list" id="rateList"></ul>
         </div>
 
         <div class="modal-error" id="ratesError" hidden></div>
         <div class="modal-actions">
-          <button id="cancelRates" class="pill ghost">Cancel</button>
-          <button id="saveRates" class="pill primary">Save rates</button>
+          <button id="cancelRates" class="btn-ghost">Cancel</button>
+          <button id="saveRates" class="btn-primary">Save rates</button>
         </div>
       </div>
     </div>
@@ -312,28 +325,28 @@
       <div class="modal">
         <div class="modal-head">
           <h2>Earnings goal</h2>
-          <button id="closeGoal" class="icon-btn ghost" title="Close">✕</button>
+          <button id="closeGoal" class="modal-x" title="Close">✕</button>
         </div>
 
-        <p class="opt rates-intro">
+        <p class="modal-intro">
           How much do you want to earn in the range you're viewing? The summary then shows
           what's left, how many work days (Mon–Fri) remain in the range, and the average
           hours per day you'd need to track to get there.
         </p>
 
         <label class="field">
-          Goal for the visible range <span class="opt" id="goalCurrency"></span>
-          <input type="number" id="g_amount" min="0" step="0.01" placeholder="0" />
+          <span class="mono-label">Goal for the visible range <span class="accent" id="goalCurrency"></span></span>
+          <input type="number" id="g_amount" min="0" step="0.01" placeholder="e.g. 5000" class="input-accent" />
         </label>
 
-        <p class="opt goal-note" id="goalNote"></p>
+        <p class="goal-note mono-note" id="goalNote"></p>
 
         <div class="modal-error" id="goalError" hidden></div>
         <div class="modal-actions">
-          <button id="clearGoal" class="pill ghost">Clear goal</button>
+          <button id="clearGoal" class="btn-ghost btn-danger-hover">Clear goal</button>
           <span class="modal-actions-spacer"></span>
-          <button id="cancelGoal" class="pill ghost">Cancel</button>
-          <button id="saveGoal" class="pill primary">Save goal</button>
+          <button id="cancelGoal" class="btn-ghost">Cancel</button>
+          <button id="saveGoal" class="btn-primary">Save goal</button>
         </div>
       </div>
     </div>
@@ -343,18 +356,18 @@
       <div class="modal">
         <div class="modal-head">
           <h2 id="wlTitle">Worklogs</h2>
-          <button id="closeWorklog" class="icon-btn ghost" title="Close">✕</button>
+          <button id="closeWorklog" class="modal-x" title="Close">✕</button>
         </div>
 
         <div class="wl-context" id="wlContext"></div>
 
-        <div class="wl-section-title">Logged on this day</div>
+        <div class="mono-label wl-section-title">Logged on this day</div>
         <ul class="wl-list" id="wlList"></ul>
 
-        <div class="wl-section-title">Add worklog</div>
+        <div class="mono-label wl-section-title">Add worklog</div>
         <div class="wl-add">
           <label class="field">
-            Date &amp; time
+            <span class="mono-label">Date &amp; time</span>
             <div class="dt-row">
               <button type="button" id="wl_date"></button>
               <input type="text" class="dt-time" id="wl_time_of_day" placeholder="09:00"
@@ -363,18 +376,18 @@
             <span class="opt" id="wlTzNote"></span>
           </label>
           <label class="field">
-            Time logged
-            <input type="text" id="wl_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" />
+            <span class="mono-label">Time logged</span>
+            <input type="text" id="wl_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" class="input-accent" />
           </label>
           <label class="field">
-            Work description
+            <span class="mono-label">Work description</span>
             <textarea id="wl_comment" rows="3" placeholder="What did you work on? (optional)"></textarea>
           </label>
           <div class="wl-ok" id="wlOk" hidden></div>
           <div class="modal-error" id="wlError" hidden></div>
           <div class="modal-actions">
-            <button id="cancelWorklog" class="pill ghost">Close</button>
-            <button id="logWorkBtn" class="pill primary">Log work</button>
+            <button id="cancelWorklog" class="btn-ghost">Close</button>
+            <button id="logWorkBtn" class="btn-primary">Log work</button>
           </div>
         </div>
       </div>
@@ -385,19 +398,19 @@
       <div class="modal">
         <div class="modal-head">
           <h2>Log new worklog</h2>
-          <button id="closeNewWorklog" class="icon-btn ghost" title="Close">✕</button>
+          <button id="closeNewWorklog" class="modal-x" title="Close">✕</button>
         </div>
 
         <label class="field">
-          Jira instance
+          <span class="mono-label">Jira instance</span>
           <select id="nw_instance" class="select"></select>
         </label>
 
         <label class="field">
-          Ticket
+          <span class="mono-label">Ticket</span>
           <div class="nw-check-row">
-            <input type="text" id="nw_key" placeholder="e.g. TIC-123" autocomplete="off" />
-            <button id="nw_checkBtn" class="pill">Check ticket</button>
+            <input type="text" id="nw_key" placeholder="e.g. TIC-123" autocomplete="off" class="input-accent mono" />
+            <button id="nw_checkBtn" class="btn-check">Check ticket</button>
           </div>
         </label>
 
@@ -405,7 +418,7 @@
 
         <div id="nw_form" hidden>
           <label class="field">
-            Date &amp; time
+            <span class="mono-label">Date &amp; time</span>
             <div class="dt-row">
               <button type="button" id="nw_date"></button>
               <input type="text" class="dt-time" id="nw_time_of_day" placeholder="09:00"
@@ -414,11 +427,12 @@
             <span class="opt" id="nw_tzNote"></span>
           </label>
           <label class="field">
-            Time logged
-            <input type="text" id="nw_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" />
+            <span class="mono-label">Time logged</span>
+            <input type="text" id="nw_time" placeholder="e.g. 1h 30m, 2h, 45m" autocomplete="off" class="input-accent mono" />
+            <span class="dur-preview" id="nw_durPreview"></span>
           </label>
           <label class="field">
-            Work description
+            <span class="mono-label">Work description</span>
             <textarea id="nw_comment" rows="3" placeholder="What did you work on? (optional)"></textarea>
           </label>
         </div>
@@ -426,12 +440,13 @@
         <div class="wl-ok" id="nw_ok" hidden></div>
         <div class="modal-error" id="nw_error" hidden></div>
         <div class="modal-actions">
-          <button id="cancelNewWorklog" class="pill ghost">Close</button>
-          <button id="nw_logBtn" class="pill primary" hidden>Log work</button>
+          <button id="cancelNewWorklog" class="btn-ghost">Close</button>
+          <button id="nw_logBtn" class="btn-primary" hidden>Log work</button>
         </div>
       </div>
     </div>
 
+    <div class="toast" id="toast" hidden></div>
     <div class="loading" id="loading" hidden><div class="spinner"></div></div>
 
     <script src="datepicker.js"></script>
