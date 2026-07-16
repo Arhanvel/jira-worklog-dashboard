@@ -404,6 +404,22 @@ main {
 .summary-spacer {
   flex: 1;
 }
+/* A divider marks where the goal tiles start. */
+#goalLeftItem:not([hidden]) {
+  border-left: 1px solid var(--border);
+  padding-left: 28px;
+}
+.summary-value.goal-left {
+  font-size: 17px;
+  white-space: nowrap;
+}
+.summary-value.goal-left .goal-target {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.summary-value.goal-left.done {
+  color: var(--green);
+}
 .status-msg {
   color: var(--text-dim);
   font-size: 13px;
@@ -1139,6 +1155,18 @@ body.table-mode main {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 6px;
+}
+.modal-actions-spacer {
+  flex: 1;
+}
+
+/* ---------- Goal modal ---------- */
+.goal-note {
+  margin: 10px 0 16px;
+  line-height: 1.45;
+}
+.goal-note.warn {
+  color: var(--today);
 }
 
 /* ---------- Rates modal ---------- */

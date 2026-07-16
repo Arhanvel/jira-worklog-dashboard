@@ -14,6 +14,7 @@ const state = {
   selectedDate: null,
   hiddenProjects: new Set(), // project keys toggled off via the legend
   rates: { currency: 'USD', defaultRate: 0, projects: {} },
+  goal: { amount: 0 }, // earnings target for whatever range is on screen
   worklogModal: null, // { instanceId, issueKey, date } while the add/view modal is open
   newWorklog: null, // { instanceId, issueKey, summary, tz } after a ticket check
 };
@@ -136,6 +137,37 @@ function moneyForEntries(entries) {
 function moneyForSeconds(seconds, projectKey) {
   return (seconds / 3600) * rateFor(projectKey);
 }
+// Is a goal in play? Money only means something once a rate exists, so the goal
+// stats ride along with the rest of the money UI.
+function hasGoal() {
+  return state.goal.amount > 0 && hasRates();
+}
+
+// The hourly rate to convert "money still needed" into "hours still needed".
+// The default rate is the honest answer; without one, fall back to the blended
+// rate the visible worklogs were actually earned at.
+function goalHourlyRate(seconds, money) {
+  if (state.rates.defaultRate > 0) return state.rates.defaultRate;
+  if (seconds > 0 && money > 0) return money / (seconds / 3600);
+  const overrides = Object.values(state.rates.projects || {}).filter((v) => v > 0);
+  if (overrides.length) return overrides.reduce((s, v) => s + v, 0) / overrides.length;
+  return 0;
+}
+
+// Work days (Mon–Fri) still ahead in the range, today included — you can still
+// log work today. A range that has already ended has none left.
+function workDaysLeftInRange() {
+  if (!state.range.from || !state.range.to) return 0;
+  const today = todayYmd();
+  let n = 0;
+  for (const d of enumerateDates(state.range.from, state.range.to)) {
+    if (d < today) continue;
+    const wd = parseYmd(d).getDay();
+    if (wd !== 0 && wd !== 6) n += 1;
+  }
+  return n;
+}
+
 function fmtMoney(amount) {
   const cur = state.rates.currency || 'USD';
   const n = amount || 0;
@@ -554,6 +586,7 @@ function renderSummary() {
     $('daysLogged').textContent = '—';
     $('avgPerDay').textContent = '—';
     moneyItem.hidden = true;
+    hideGoal();
     return;
   }
   let total = 0;
@@ -576,6 +609,58 @@ function renderSummary() {
     moneyItem.hidden = false;
   } else {
     moneyItem.hidden = true;
+  }
+  renderGoal(total, money);
+}
+
+const GOAL_ITEMS = ['goalLeftItem', 'goalDaysItem', 'goalPaceItem'];
+
+function hideGoal() {
+  GOAL_ITEMS.forEach((id) => ($(id).hidden = true));
+}
+
+// The goal tiles: what's left of the target, how many work days remain to earn
+// it in, and the daily pace that implies.
+function renderGoal(seconds, money) {
+  if (!hasGoal()) {
+    hideGoal();
+    return;
+  }
+  GOAL_ITEMS.forEach((id) => ($(id).hidden = false));
+
+  const goal = state.goal.amount;
+  const left = Math.max(0, goal - money);
+  const days = workDaysLeftInRange();
+  const rate = goalHourlyRate(seconds, money);
+  const perDay = days > 0 ? left / days : 0;
+
+  const leftEl = $('goalLeft');
+  leftEl.innerHTML =
+    `${escapeHtml(fmtMoney(left))}<span class="goal-target"> / ${escapeHtml(fmtMoney(goal))}</span>`;
+  leftEl.classList.toggle('done', left <= 0);
+  $('goalLeftItem').title = `${fmtMoney(money)} of ${fmtMoney(goal)} earned in this range`;
+
+  $('goalDays').textContent = String(days);
+
+  const paceEl = $('goalPace');
+  const paceLabel = $('goalPaceLabel');
+  const paceItem = $('goalPaceItem');
+  if (left <= 0) {
+    paceEl.textContent = 'Reached 🎉';
+    paceLabel.textContent = 'goal met for this range';
+    paceItem.title = '';
+  } else if (!days) {
+    paceEl.textContent = '—';
+    paceLabel.textContent = 'no work days left in range';
+    paceItem.title = '';
+  } else if (rate > 0) {
+    paceEl.textContent = fmtTime(Math.round((perDay / rate) * 3600));
+    paceLabel.textContent = 'needed / work day';
+    paceItem.title = `${fmtMoney(perDay)} per work day at ${fmtMoney(rate)}/h`;
+  } else {
+    paceEl.textContent = fmtMoney(perDay);
+    paceLabel.textContent = 'needed / work day';
+    paceItem.title = 'Set a default hourly rate to see this as hours.';
   }
 }
 
@@ -1303,6 +1388,65 @@ async function saveRates() {
 }
 
 /* ================================================================== */
+/* Goal modal                                                         */
+/* ================================================================== */
+
+async function refreshGoal() {
+  try {
+    const g = await api('/api/goal');
+    state.goal = { amount: g.amount || 0 };
+  } catch {
+    /* keep defaults */
+  }
+}
+
+function openGoal() {
+  $('g_amount').value = state.goal.amount ? String(state.goal.amount) : '';
+  $('goalCurrency').textContent = state.rates.currency || 'USD';
+
+  const note = $('goalNote');
+  const days = workDaysLeftInRange();
+  const range = fmtRangeLabel(state.range.from, state.range.to);
+  if (!hasRates()) {
+    note.textContent =
+      'Set an hourly rate first — without one there are no earnings to measure the goal against.';
+    note.classList.add('warn');
+  } else {
+    note.textContent = `Current range: ${range} · ${days} work day${
+      days === 1 ? '' : 's'
+    } left in it.`;
+    note.classList.remove('warn');
+  }
+
+  $('goalError').hidden = true;
+  $('goalModal').hidden = false;
+  $('g_amount').focus();
+}
+function closeGoal() {
+  $('goalModal').hidden = true;
+}
+
+async function saveGoal(amount) {
+  $('goalError').hidden = true;
+  showLoading(true);
+  try {
+    const res = await api('/api/goal', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount }),
+    });
+    state.goal = res.goal;
+    closeGoal();
+    render();
+  } catch (err) {
+    $('goalError').textContent = err.message || 'Could not save the goal.';
+    $('goalError').hidden = false;
+  } finally {
+    showLoading(false);
+  }
+}
+
+/* ================================================================== */
 /* Worklog modal — view a cell's worklogs and add a new one           */
 /* ================================================================== */
 
@@ -1795,6 +1939,22 @@ function wireEvents() {
     if (e.target === $('ratesModal')) closeRates();
   });
 
+  // Goal modal
+  $('goalBtn').addEventListener('click', openGoal);
+  $('closeGoal').addEventListener('click', closeGoal);
+  $('cancelGoal').addEventListener('click', closeGoal);
+  $('saveGoal').addEventListener('click', () => saveGoal(Number($('g_amount').value) || 0));
+  $('clearGoal').addEventListener('click', () => saveGoal(0));
+  $('g_amount').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveGoal(Number($('g_amount').value) || 0);
+    }
+  });
+  $('goalModal').addEventListener('click', (e) => {
+    if (e.target === $('goalModal')) closeGoal();
+  });
+
   // Settings modal
   $('settingsBtn').addEventListener('click', openSettings);
   $('closeSettings').addEventListener('click', closeSettings);
@@ -1836,6 +1996,10 @@ function wireEvents() {
       if (e.key === 'Escape') closeRates();
       return;
     }
+    if (!$('goalModal').hidden) {
+      if (e.key === 'Escape') closeGoal();
+      return;
+    }
     if (!$('worklogModal').hidden) {
       if (e.key === 'Escape') closeWorklog();
       return;
@@ -1863,7 +2027,7 @@ async function init() {
   render();
 
   try {
-    await Promise.all([refreshInstances(), refreshRates()]);
+    await Promise.all([refreshInstances(), refreshRates(), refreshGoal()]);
     if (!state.instances.length) {
       openSettings();
       openForm(null);

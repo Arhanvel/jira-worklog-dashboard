@@ -26,6 +26,7 @@
         <button id="refreshBtn" class="pill" title="Reload from Jira">↻</button>
         <button id="newWorklogBtn" class="pill primary" title="Log work on any ticket">➕ Log work</button>
         <button id="ratesBtn" class="pill" title="Hourly rates">💲 Rates</button>
+        <button id="goalBtn" class="pill" title="Earnings goal for the visible range">🎯 Goal</button>
         <button id="settingsBtn" class="pill">⚙ Instances</button>
       </div>
     </header>
@@ -71,6 +72,18 @@
         <div class="summary-item" id="moneyItem" hidden>
           <span class="summary-value money" id="rangeMoney">—</span>
           <span class="summary-label">earned in range</span>
+        </div>
+        <div class="summary-item goal-item" id="goalLeftItem" hidden>
+          <span class="summary-value money goal-left" id="goalLeft">—</span>
+          <span class="summary-label">left / goal in range</span>
+        </div>
+        <div class="summary-item goal-item" id="goalDaysItem" hidden>
+          <span class="summary-value" id="goalDays">—</span>
+          <span class="summary-label">work days left in range</span>
+        </div>
+        <div class="summary-item goal-item" id="goalPaceItem" hidden>
+          <span class="summary-value" id="goalPace">—</span>
+          <span class="summary-label" id="goalPaceLabel">needed / work day</span>
         </div>
         <div class="summary-spacer"></div>
         <div id="statusMsg" class="status-msg"></div>
@@ -290,6 +303,37 @@
         <div class="modal-actions">
           <button id="cancelRates" class="pill ghost">Cancel</button>
           <button id="saveRates" class="pill primary">Save rates</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Goal modal -->
+    <div class="modal-backdrop" id="goalModal" hidden>
+      <div class="modal">
+        <div class="modal-head">
+          <h2>Earnings goal</h2>
+          <button id="closeGoal" class="icon-btn ghost" title="Close">✕</button>
+        </div>
+
+        <p class="opt rates-intro">
+          How much do you want to earn in the range you're viewing? The summary then shows
+          what's left, how many work days (Mon–Fri) remain in the range, and the average
+          hours per day you'd need to track to get there.
+        </p>
+
+        <label class="field">
+          Goal for the visible range <span class="opt" id="goalCurrency"></span>
+          <input type="number" id="g_amount" min="0" step="0.01" placeholder="0" />
+        </label>
+
+        <p class="opt goal-note" id="goalNote"></p>
+
+        <div class="modal-error" id="goalError" hidden></div>
+        <div class="modal-actions">
+          <button id="clearGoal" class="pill ghost">Clear goal</button>
+          <span class="modal-actions-spacer"></span>
+          <button id="cancelGoal" class="pill ghost">Cancel</button>
+          <button id="saveGoal" class="pill primary">Save goal</button>
         </div>
       </div>
     </div>

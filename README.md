@@ -164,6 +164,12 @@ times are shown in the same zone they're grouped by.
   time** everywhere totals appear (summary, legend, calendar days, day detail, and the
   table totals). Money is worked out locally from your logged time — nothing is sent
   to Jira. Leave the rate at `0` to hide money entirely.
+- **🎯 Goal** — set how much you want to **earn in the range you're viewing**. The
+  summary then shows what's **left of the goal**, how many **work days** (Mon–Fri,
+  today included) are still ahead in the range, and the **average hours per work day**
+  you'd need to track to hit it. Example: at `$20/h` with `$1,000` still to earn and
+  5 work days left, that's `$200/day` — **10h/day**. Needs an hourly rate to mean
+  anything; **Clear goal** turns it off.
 - **↻ Refresh** — re-fetch the current range from Jira.
 - **⚙ Instances** — add, edit, or remove Jira connections.
 
@@ -194,6 +200,7 @@ Cloud instances use REST v3 + `/search/jql`; Server/DC instances use REST v2 +
 | Config file location | `CONFIG_PATH` environment variable | `./config.json` |
 | Jira instances | **⚙ Instances** dialog → saved to `config.json` | — |
 | Hourly rates | **💲 Rates** dialog → saved to `config.json` | none (money hidden) |
+| Earnings goal | **🎯 Goal** dialog → saved to `config.json` | none (goal hidden) |
 
 Set a custom port:
 
@@ -226,12 +233,16 @@ $env:PORT=4000; npm start
     "currency": "USD",
     "defaultRate": 50,
     "projects": { "ABC": 75 }
-  }
+  },
+  "goal": { "amount": 5000 }
 }
 ```
 
 > `rates` is optional. `defaultRate` is the global hourly rate; `projects` maps a
 > project key to a rate that overrides the default for that project.
+>
+> `goal` is optional. `amount` is what you're aiming to earn in whichever date range
+> you're viewing; `0` (or omitting it) hides the goal stats.
 >
 > `timeZone` on an instance is optional too — a UTC offset like `"+03:00"` (or an
 > IANA name such as `"Europe/Berlin"`) used to group worklogs into days. Omit it to

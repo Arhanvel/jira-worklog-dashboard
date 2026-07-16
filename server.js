@@ -128,6 +128,14 @@ function normaliseRates(raw) {
   };
 }
 
+// Earnings goal for whichever date range is on screen: { amount: 5000 }.
+// 0 (or anything unparseable) means "no goal set".
+function normaliseGoal(raw) {
+  const g = raw && typeof raw === 'object' ? raw : {};
+  const amount = Number(g.amount);
+  return { amount: Number.isFinite(amount) && amount > 0 ? amount : 0 };
+}
+
 function pickInstance(cfg, id) {
   return (
     (id && findInstance(cfg, id)) ||
@@ -821,6 +829,18 @@ app.put('/api/rates', (req, res) => {
   cfg.rates = normaliseRates(req.body);
   writeConfig(cfg);
   res.json({ ok: true, rates: cfg.rates });
+});
+
+app.get('/api/goal', (req, res) => {
+  const cfg = readConfig();
+  res.json(normaliseGoal(cfg.goal));
+});
+
+app.put('/api/goal', (req, res) => {
+  const cfg = readConfig();
+  cfg.goal = normaliseGoal(req.body);
+  writeConfig(cfg);
+  res.json({ ok: true, goal: cfg.goal });
 });
 
 app.get('/api/me', async (req, res) => {
